@@ -4,6 +4,19 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-21
+
+### Changed
+
+- Rewrote the Chinese README as a full introduction: what problem the plugin
+  solves, where the entry and panel live, the feature list, a five-step quick
+  start (copy the cookie, diagnose, pick project and task list, bind a workspace,
+  run a card), install notes for app-owned profiles, privacy rules, known limits,
+  and the version/branch policy.
+- Rewrote the English README to the same structure so the two sides stay a true
+  pair, and re-recorded both git blob hashes in `README.i18n.yaml`.
+- README language switcher added on both sides.
+
 ## [0.1.0] - 2026-10-21
 
 First tagged release (`v0.1` line).

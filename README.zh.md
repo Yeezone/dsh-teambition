@@ -1,72 +1,129 @@
-# dsh-teambition
+# dsh-teambition 中文说明
 
-DeepSeek Harness Web GUI 的 Teambition 面板插件。它在侧边栏加入「Teambition」
-入口，并在中栏打开整页面板，不用离开 GUI 就能浏览和操作项目与卡片：切换项目、
-按看板列查看卡片、新建卡片、把卡片移到其它工作流状态或看板列，以及把某张卡片
-放到指定的 DSH 工作区里执行。
+[English](README.md) | 中文
 
-面板通过用户自己已登录的浏览器 Cookie 访问 Teambition，Cookie 只存在 Host
-侧，不写入浏览器存储，也不会进入模型可见的输出。
+**把钉钉 Teambition 接进 DeepSeek Harness 的侧边栏。** 项目、任务列表、卡片都能在 DSH 里直接看、
+直接操作，选中任意一张卡片点「执行」，就会在你指定的 DSH 工作区里开一个会话，带着这张卡片的信息
+开始干活——不用再在两个窗口之间来回切换。
+
+- 仓库：<https://github.com/Yeezone/dsh-teambition>
+- 当前版本：`0.1.0`（发布线 `v0.1`）
+- 许可证：Apache-2.0
+
+## 它解决什么问题
+
+平时在 DSH 里写代码、跑 Agent，而任务和缺陷记在 Teambition 上：看一条需求要切窗口，复制卡片
+内容还要手工整理。这个插件把 Teambition 做成 DSH 的一个面板：
+
+1. 左侧边栏点「Teambition」，中间整页打开看板，空间不浪费；
+2. 选项目、选任务列表，按看板列看卡片；
+3. 点某张卡片「执行」，插件在绑定的工作区里创建会话，把卡片标题、所属项目、链接、更新时间
+   和备注正文作为初始提示词提交，然后自动切到那个会话。
+
+「哪张卡片在哪个项目里执行」这件事是可配置的：卡片单独绑定优先，其次是项目默认工作区，最后是
+面板级默认工作区；不给卡片绑定时，就按后两级执行。
+
+## 界面入口
+
+- **侧边栏行**：挂在官方 `sidebar.panellist` 座位上，位置在「插件 / 自动化任务」之后。
+- **中栏页面**：挂在官方 `main` 座位上，顶部是「项目 / 任务列表 / 刷新 / 设置」。
+- **看板区**：每个看板列一组卡片，卡片上有状态徽标、执行工作区标记，以及
+  「执行」「在 Teambition 打开」「绑定执行工作区」「移动到看板列」。
+- **新建卡片**：面板底部表单，可填标题、备注（可选）和看板列。
+- **设置视图**：Cookie（保存 / 清除）、诊断连接、operator id、接口地址、默认执行工作区、
+  按项目的工作区绑定表。
 
 ## 功能
 
-- 侧边栏入口（`sidebar.panellist`）+ 中栏页面（`main`），走官方 slot 契约挂载，
-  不改 DSH 源码 checkout。
-- 项目切换器、按列分组的卡片、工作流状态标签、为当前项目新建卡片。
-- 卡片操作：在 DSH 中执行、改状态 / 换列、在 Teambition 中打开。
-- 工作区绑定：单卡覆盖、项目默认、面板默认，解析顺序为卡片 > 项目 > 默认。
-- 面板内的设置视图：Cookie（保存 / 清除）、operator id、端点基址（`api`/`web`）、
-  诊断探测、默认工作区、按项目的工作区表。
-- 一个模型可见工具 `teambition`：列项目、读项目、建卡、移动卡片、记录工作区绑定。
+- 项目与任务列表两级切换；多任务列表的项目按任务列表分组展示，避免几十列同名看板列把卡片摊薄，
+  选择结果记在 `localStorage`，下次打开自动恢复。
+- 卡片操作：在 DSH 中执行、移动到其它看板列、移动到其它工作流状态（项目暴露该端点时）、
+  在 Teambition 打开。
+- 工作区绑定：卡片 > 项目 > 面板默认，三级优先级，由 Host 解析后下发，浏览器半区不需要
+  完整绑定表。
+- 诊断：对 6 个候选端点逐个探测，把每一步的 HTTP 状态与结论显示在设置视图，便于排查 Cookie
+  失效或接口变动。
+- 模型可见工具 `teambition`：会话里也能列项目、读项目详情、新建卡片、移动卡片、记录工作区绑定。
+- 中英双语界面，跟随 DSH 的语言与深浅主题。
 
-## 本地构建安装
+## 快速上手
 
-`@yeezone/dsh-client-ui-teambition` 是双半区 cordis 插件包：node 半区
-（`exports "."`）跑在宿主进程里，提供 `POST /teambition/*`；浏览器半区
-（`exports "./client"`）由 GUI 以 `/plugins/@yeezone/dsh-client-ui-teambition/client.js`
-加载。
+1. 在浏览器登录 <https://www.teambition.com>，按 F12 打开开发者工具 → Network，
+   刷新页面，随便点一个请求，复制它的 **Cookie 请求头**（整行，不是网址）。
+2. DSH 侧边栏 →「Teambition」→「设置」→ 把 Cookie 粘进文本框 →「保存 Cookie」→
+   「诊断连接」，结论显示「Cookie 可用」就通了。
+3. 回到看板，在顶部选项目；项目有多个任务列表时再选任务列表（默认「全部任务列表」，按组展示）。
+4. 在设置里选一个「默认执行工作区」，或者给某个项目 / 某张卡片单独绑定工作区。
+5. 点卡片上的「执行」→ 插件在该工作区新建会话并提交卡片信息，随后自动打开会话。
+
+> Cookie 会过期。失效时卡片区与诊断结论会提示 `HTTP 401 AccessTokenMissing`，重新复制一次
+> Cookie 保存即可。
+
+## 安装
+
+`@yeezone/dsh-client-ui-teambition` 是双半区 cordis 插件包：node 半区（`exports "."`）跑在宿主
+进程里，提供 `POST /teambition/*`；浏览器半区（`exports "./client"`）由 GUI 以
+`/plugins/@yeezone/dsh-client-ui-teambition/client.js` 加载。
 
 ```sh
-pnpm install
+git clone https://github.com/Yeezone/dsh-teambition.git
+cd dsh-teambition
+pnpm install --frozen-lockfile
 pnpm run build
+dsh plugin --profile <profile> add link:$PWD
 ```
 
-然后把它加进 profile 并重启应用：
+`cordis.patch.yml` 会插入 `ui-teambition` 行，profile 启动时两个半区一起挂载。**必须完整退出并
+重新打开应用**：只有组合里出现新行，浏览器半区才会加载；之后改客户端代码只需刷新页面。
 
-```sh
-dsh plugin --profile desktop add link:<本仓库路径>
-```
-
-bundle patch（`cordis.patch.yml`）会插入 `ui-teambition` 行，profile 启动时两个
-半区一起挂载。必须重启桌面应用：只有组合里出现新行，浏览器半区才会加载。
-
-如果 profile 由打包应用托管（桌面版的 `desktop` profile），CLI 会拒绝写入：请在 GUI 的
-「插件」页安装，或手动把依赖和 `dsh.profile.bundles` 行写进该 profile 的 `package.json`，
-然后重启应用。
+如果 profile 由打包应用托管（桌面版的 `desktop` profile），CLI 会拒绝写入：在 GUI 的「插件」页
+安装，或手动把依赖和 `dsh.profile.bundles` 行写进该 profile 的 `package.json`，再重启应用。
 
 ## 数据与隐私
 
-- Host 状态：`$DSH_HOME/teambition/config.json`（`0600`），保存 Cookie、operator
-  id、端点基址、工作区绑定、最近一次诊断与最近项目列表；写入是原子的。
-- 浏览器半区只拿到 `configured` 和四位 `cookieTail`，Cookie 本身不跨越边界。
-- 远端读取走内部 v3 端点 + 候选路径 + `diagnose` 探测，而不是硬编码假设；响应
-  预览先脱敏再进设置视图。
-- 执行卡片会在绑定的工作区里创建 DSH 会话并提交一条排队 prompt；除了你主动点
-  状态 / 换列 / 新建，面板不会写回 Teambition。
+- Host 状态保存在 `$DSH_HOME/teambition/config.json`（权限 `0600`），内容包含 Cookie、operator
+  id、接口地址、工作区绑定、最近一次诊断与最近项目列表；写入使用临时文件 + 原子替换。
+- 浏览器半区只拿到 `configured` 与四位 `cookieTail`，Cookie 本身不跨越 Host / 浏览器边界，
+  也不会进入模型可见输出。
+- 远端读取走 Teambition 网页自身的 REST 接口 + 候选路径 + `diagnose` 探测，而不是硬编码假设；
+  响应预览脱敏后才进入设置视图。
+- 插件只在用户主动点击「新建 / 换列 / 改状态」时写回 Teambition；执行卡片只创建本地 DSH 会话。
 
-## 目录
+## 已知限制
 
-- `src/core/` - 共享词汇、wire 契约（`protocol.ts`）、Teambition 类型 / 端点 /
-  映射 / 脱敏。
+- 使用的是 Teambition 网页端的内部 REST 接口（属于浏览器登录态，不是官方开放 API），
+  官方可能随时调整。
+- 工作流状态推送依赖对应端点；没有工作流状态的项目只能「移动到看板列」，不能按状态推进。
+- 单个项目最多读取 40 页 × 200 张卡片，超出部分不显示。
+- 没有后台轮询或 webhook，进入面板或点「刷新」时才拉取最新数据。
+- 跨项目移动卡片尚未实现（接口路径未验证）。
+
+## 版本与分支
+
+- `main` 是开发主干；`v0.1` 是当前冻结的发布线（`0.1.x`）。
+- 新需求从 `main` 切 `feat/<slug>`，修复切 `fix/<slug>`；每次落 `main` 都要升
+  `package.json` 的 `version` 并在 `CHANGELOG.md` 补条目，PR 模板里逐条勾选。
+- 发布线只接受 cherry-pick 的修复，并以 patch tag 发布；`main` CI 绿之后才打
+  annotated tag 与 GitHub Release。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 目录结构
+
+- `src/core/` - 共享词汇、wire 契约（`protocol.ts`）、Teambition 类型 / 端点 / 映射 / 脱敏。
 - `src/host/` - 配置存储、Teambition REST 服务、HTTP 路由、agent 工具。
 - `src/client/` - 中英文词典、API 客户端、面板、侧边栏注册。
+- `shared/` - 从 dsh-web 仓库随包携带的构建预设（tsdown 客户端打包 + 平台种子表）。
 - `tests/` - 覆盖两个半区的 vitest 套件。
 
 ## 测试
 
 ```sh
-pnpm test
 pnpm run typecheck
+pnpm test
+pnpm run build
 ```
 
-仓库对本包的规则见 `AGENTS.md`（构建纯度、文案中英对照、双半区清单纪律）。
+## 致谢与许可
+
+Apache-2.0。Teambition 客户端与配置代码改编自
+[dsh-web](https://github.com/zhu1090093659/dsh-web) 的 `dsh-task-board` 包（Apache-2.0），
+上游归属与复用范围见 [NOTICE](NOTICE)。本插件不由该仓库作者维护。
