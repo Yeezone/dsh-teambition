@@ -25,6 +25,8 @@ import {
   type TeambitionStageView,
   type TeambitionStateView,
   type TeambitionTaskCreateRequest,
+  type TeambitionTaskDetailRequest,
+  type TeambitionTaskDetailView,
   type TeambitionTaskStageRequest,
   type TeambitionTaskStatusRequest,
   type TeambitionViewView,
@@ -113,6 +115,7 @@ export interface TeambitionClientPort {
   updateTaskStatus(taskId: string, statusId: string): Promise<void>
   updateTaskStage(taskId: string, stageId: string): Promise<void>
   createTask(input: TeambitionTaskWrite): Promise<{ taskId: string }>
+  taskDetail(projectId: string, taskId: string): Promise<TeambitionTaskDetailView>
 }
 
 /** Creation seams of the service (tests inject transport, clock and client). */
@@ -287,6 +290,35 @@ export class TeambitionService {
         ...(selected === undefined ? {} : { viewId: selected.id }),
         cards: cardsOfView,
       }
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /**
+   * One card in full.
+   *
+   * The client reads the remote payload; the service fills in the two things the
+   * client cannot know: the project display name and the DSH workspace the same
+   * card would execute in on the board.
+   */
+  async taskDetail(request: TeambitionTaskDetailRequest): Promise<TeambitionTaskDetailView> {
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    const known = (state.projects ?? []).find(project => project.id === request.projectId)
+    const settings = settingsView(state)
+    try {
+      const detail = await client.taskDetail(request.projectId, request.taskId)
+      const choice = resolveWorkspace(detail.card.id, request.projectId, settings)
+      const card: TeambitionCardView = {
+        ...detail.card,
+        projectName: known?.name ?? detail.card.projectName,
+        ...(choice === undefined ? {} : { workspaceId: choice.workspaceId, workspaceSource: choice.source }),
+      }
+      await this.store.save({ ...state, lastSyncAt: this.now(), lastError: undefined })
+      return { ...detail, card }
     } catch (error) {
       const message = describe(error)
       await this.store.save({ ...state, lastError: message })

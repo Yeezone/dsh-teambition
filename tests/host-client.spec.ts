@@ -351,3 +351,164 @@ describe('createTask', () => {
     expect(bodyOf(fake.requests.at(-1))).toMatchObject({ taskflowstatusId: 'st2', scenarioConfigId: 'sc2' })
   })
 })
+
+const TASK_DETAIL_URL = 'https://www.teambition.com/api/tasks/t1'
+const TASK_SUBTASKS_V2_URL = /^https:\/\/www\.teambition\.com\/api\/v2\/tasks\/t1\/subtasks\?withSubtasks=true&excludeInTfsNode=false&pageSize=200$/
+const TASK_SUBTASKS_LEGACY_URL = 'https://www.teambition.com/api/tasks/t1/subtasks'
+const TASK_ACTIVITIES_V2_URL = /^https:\/\/www\.teambition\.com\/api\/v2\/tasks\/t1\/activities\?/
+const TASK_ACTIVITIES_LEGACY_URL = 'https://www.teambition.com/api/tasks/t1/activities'
+
+/** One full detail payload as the web client receives it. */
+const DETAIL_BODY = {
+  _id: 't1',
+  content: '  Build the detail page  ',
+  note: 'Line one\nLine two',
+  _projectId: 'p1',
+  _tasklistId: 'tl1',
+  _stageId: 's1',
+  _taskflowstatusId: 'st1',
+  uniqueId: 42,
+  priority: 2,
+  created: '2024-01-02T03:04:05.000Z',
+  updated: '2024-02-03T04:05:06.000Z',
+  dueDate: '2024-03-01T00:00:00.000Z',
+  startDate: '2024-02-01T00:00:00.000Z',
+  storyPoint: 5,
+  attachmentsCount: 3,
+  commentsCount: 2,
+  subtaskCount: { total: 2, done: 1 },
+  _creatorId: 'u1',
+  creator: { _id: 'u1', name: 'Creator One' },
+  executor: { _id: 'u2', name: 'Executor Two', avatarUrl: 'https://x/e.png' },
+  involvers: [{ _id: 'u3', name: 'Involver Three' }],
+  involveMembers: ['u1', 'u2'],
+  customfields: [
+    { _id: 'cf1', title: 'Severity', value: 'High' },
+    { name: 'Estimate', value: 3 },
+    { title: 'Empty', value: '' },
+  ],
+  subtasks: [{ _id: 'st-embedded', content: ' Embedded ', isDone: true }],
+}
+
+const SUBTASK_BODY = {
+  result: [
+    { _id: 'sub1', content: '  Write tests  ', isDone: true, dueDate: '2024-04-01T00:00:00.000Z', executor: { name: 'Executor Two' } },
+    { _id: 'sub2', content: 'Ship', accomplished: true },
+  ],
+  nextPageToken: 'page-two',
+}
+
+const ACTIVITY_BODY = {
+  result: [
+    {
+      _id: 'a1',
+      action: 'activity.task.update.taskflowstatus.v2',
+      title: 'Creator One 将任务状态从 Doing 改为 Done',
+      creator: { name: 'Creator One' },
+      created: '2024-02-04T00:00:00.000Z',
+    },
+  ],
+  total: 1,
+}
+
+describe('taskDetail', () => {
+  it('reads the card, description, members, fields, subtasks and activities', async () => {
+    const fake = fakeTransport([
+      { url: TASK_DETAIL_URL, body: DETAIL_BODY },
+      { url: TASK_SUBTASKS_V2_URL, body: SUBTASK_BODY },
+      { url: TASK_ACTIVITIES_V2_URL, body: ACTIVITY_BODY },
+    ])
+    const detail = await webClient(fake.transport).taskDetail('p1', 't1')
+    expect(detail.card).toEqual({
+      id: 't1',
+      projectId: 'p1',
+      projectName: 'p1',
+      title: 'Build the detail page',
+      note: 'Line one\nLine two',
+      stageId: 's1',
+      tasklistId: 'tl1',
+      statusId: 'st1',
+      updatedAt: Date.parse('2024-02-03T04:05:06.000Z'),
+      priority: 2,
+      uniqueId: 42,
+      executorId: 'u2',
+      executorName: 'Executor Two',
+      executorAvatarUrl: 'https://x/e.png',
+      creatorId: 'u1',
+      dueAt: Date.parse('2024-03-01T00:00:00.000Z'),
+      dueAtRaw: '2024-03-01T00:00:00.000Z',
+      createdAt: Date.parse('2024-01-02T03:04:05.000Z'),
+      subtaskCount: 2,
+      commentsCount: 2,
+      url: 'https://www.teambition.com/project/p1/tasks/t1',
+    })
+    expect(detail.note).toBe('Line one\nLine two')
+    expect(detail.creatorName).toBe('Creator One')
+    expect(detail.involverNames).toEqual(['Involver Three'])
+    expect(detail.startAtRaw).toBe('2024-02-01T00:00:00.000Z')
+    expect(detail.storyPoint).toBe(5)
+    expect(detail.attachmentsCount).toBe(3)
+    expect(detail.customFields).toEqual([
+      { name: 'Severity', value: 'High' },
+      { name: 'Estimate', value: '3' },
+    ])
+    expect(detail.subtasks).toEqual([
+      { id: 'sub1', title: 'Write tests', isDone: true, executorName: 'Executor Two', dueAtRaw: '2024-04-01T00:00:00.000Z' },
+      { id: 'sub2', title: 'Ship', isDone: true },
+    ])
+    expect(detail.activities).toEqual([
+      {
+        id: 'a1',
+        title: 'Creator One 将任务状态从 Doing 改为 Done',
+        action: 'activity.task.update.taskflowstatus.v2',
+        actorName: 'Creator One',
+        createdAt: Date.parse('2024-02-04T00:00:00.000Z'),
+      },
+    ])
+    expect(detail.fetchedAt).toEqual(expect.any(Number))
+  })
+
+  it('falls back to the embedded subtasks and an empty feed when those routes fail', async () => {
+    const fake = fakeTransport([
+      { url: TASK_DETAIL_URL, body: DETAIL_BODY },
+      { url: TASK_SUBTASKS_V2_URL, status: 404, body: { code: 'NotFound' } },
+      { url: TASK_SUBTASKS_LEGACY_URL, status: 404, body: { code: 'NotFound' } },
+      { url: TASK_ACTIVITIES_V2_URL, status: 404, body: { code: 'NotFound' } },
+      { url: TASK_ACTIVITIES_LEGACY_URL, status: 404, body: { code: 'NotFound' } },
+    ])
+    const detail = await webClient(fake.transport).taskDetail('p1', 't1')
+    expect(detail.subtasks).toEqual([{ id: 'st-embedded', title: 'Embedded', isDone: true }])
+    expect(detail.activities).toEqual([])
+    expect(detail.card.subtaskCount).toBe(2)
+  })
+
+  it('reads a legacy bare-array subtask list and activity feed', async () => {
+    const fake = fakeTransport([
+      { url: TASK_DETAIL_URL, body: DETAIL_BODY },
+      { url: TASK_SUBTASKS_V2_URL, status: 404, body: { code: 'NotFound' } },
+      { url: TASK_SUBTASKS_LEGACY_URL, body: [{ _id: 'sub-legacy', content: 'Legacy', isDone: false }] },
+      { url: TASK_ACTIVITIES_V2_URL, status: 404, body: { code: 'NotFound' } },
+      {
+        url: TASK_ACTIVITIES_LEGACY_URL,
+        body: [{ _id: 'a-legacy', action: 'activity.task.create.v2', title: 'created', created: '2024-05-01T00:00:00.000Z' }],
+      },
+    ])
+    const detail = await webClient(fake.transport).taskDetail('p1', 't1')
+    expect(detail.subtasks).toEqual([{ id: 'sub-legacy', title: 'Legacy', isDone: false }])
+    expect(detail.activities).toEqual([
+      {
+        id: 'a-legacy',
+        title: 'created',
+        action: 'activity.task.create.v2',
+        createdAt: Date.parse('2024-05-01T00:00:00.000Z'),
+      },
+    ])
+  })
+
+  it('propagates a refused cookie from the detail route', async () => {
+    const fake = fakeTransport([
+      { url: TASK_DETAIL_URL, status: 401, body: { code: 'InvalidCookie', message: 'expired' } },
+    ])
+    await expect(webClient(fake.transport).taskDetail('p1', 't1')).rejects.toMatchObject({ failure: 'invalid-cookie' })
+  })
+})

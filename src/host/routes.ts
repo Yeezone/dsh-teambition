@@ -42,6 +42,7 @@ const ROUTES = {
   projects: `/${TEAMBITION_ROUTES.projects}`,
   project: `/${TEAMBITION_ROUTES.project}`,
   taskCreate: `/${TEAMBITION_ROUTES.taskCreate}`,
+  taskDetail: `/${TEAMBITION_ROUTES.taskDetail}`,
   taskStatus: `/${TEAMBITION_ROUTES.taskStatus}`,
   taskStage: `/${TEAMBITION_ROUTES.taskStage}`,
   bind: `/${TEAMBITION_ROUTES.bind}`,
@@ -255,6 +256,13 @@ export function registerTeambitionRoutes(ctx: Context, service: TeambitionServic
             ...(statusId === undefined ? {} : { statusId }),
             ...(scenarioConfigId === undefined ? {} : { scenarioConfigId }),
             ...(executorId === undefined ? {} : { executorId }),
+          }))
+        }
+        case ROUTES.taskDetail: {
+          const record = requireObject(payload)
+          return valid(await service.taskDetail({
+            projectId: requiredString(record, 'projectId'),
+            taskId: requiredString(record, 'taskId'),
           }))
         }
         case ROUTES.taskStatus: {

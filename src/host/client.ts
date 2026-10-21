@@ -19,6 +19,7 @@ import {
   endpointUrl,
   endpointWithQuery,
   isInvalidCookieError,
+  parseInstant,
   projectScenarioConfigCandidates,
   projectStageCandidates,
   projectStatusCandidates,
@@ -31,15 +32,19 @@ import {
   readCollection,
   readNextPageToken,
   readProjects,
+  readRemoteTask,
   readTasks,
   readWorkflowStatus,
   readWorkflowStatuses,
   redactMessage,
   redactPreview,
   selectUsableProjectProbe,
+  taskActivityCandidates,
   taskCreateCandidates,
+  taskDetailCandidates,
   taskStageUpdateCandidates,
   taskStatusUpdateCandidates,
+  taskSubtaskCandidates,
   truncate,
   TEAMBITION_WEB_APP,
   TEAMBITION_WEB_BASE,
@@ -52,6 +57,14 @@ import {
   type TeambitionTasklist,
   type TeambitionWorkflowStatus,
 } from '../core/teambition/index.ts'
+import {
+  cardUrl,
+  type TeambitionActivityView,
+  type TeambitionCardView,
+  type TeambitionCustomFieldView,
+  type TeambitionSubtaskView,
+  type TeambitionTaskDetailView,
+} from '../core/protocol.ts'
 import { TeambitionTransportError, createNodeTransport, type TeambitionTransport } from './transport.ts'
 
 /** How a request failed. */
@@ -642,6 +655,103 @@ export class TeambitionClient {
   }
 
   /**
+   * Read one task in full.
+   *
+   * The detail route is required, while the subtask collection and the activity
+   * feed are best-effort: a task that carries its subtasks inline still renders
+   * them when the collection route is unavailable, and a missing feed renders
+   * an empty one. The returned card carries only workspace-independent fields:
+   * the project name and the DSH workspace are resolved by the service, which
+   * alone knows the bindings.
+   * @param projectId - remote project id.
+   * @param taskId - remote task id.
+   * @returns the card plus description, members, fields, subtasks and activity.
+   */
+  async taskDetail(projectId: string, taskId: string): Promise<TeambitionTaskDetailView> {
+    const [detail, subtasks, activities] = await Promise.allSettled([
+      this.readTaskDetailObject(taskId),
+      this.readTaskSubtasks(taskId),
+      this.readTaskActivities(taskId),
+    ])
+    if (detail.status === 'rejected') throw detail.reason
+    const record = detail.value
+    const task = readRemoteTask(record, projectId)
+    if (task === undefined) {
+      throw new TeambitionApiError('shape', `task ${taskId} carried no readable task object`)
+    }
+    const listed = subtasks.status === 'fulfilled' ? subtasks.value : []
+    const rows = listed.length === 0 ? readSubtasks(record.subtasks) : listed
+    const feed = activities.status === 'fulfilled' ? activities.value : []
+    const declared = readSubtaskTotal(record)
+    const subtaskCount = declared ?? (rows.length === 0 ? undefined : rows.length)
+    const creator = inlineMemberName(record.creator)
+    return {
+      card: detailCardView(task, subtaskCount),
+      note: readTaskNote(record),
+      ...(creator === undefined ? {} : { creatorName: creator }),
+      involverNames: readInvolverNames(record),
+      ...readTaskTiming(record),
+      customFields: readCustomFields(record),
+      subtasks: rows,
+      activities: feed,
+      fetchedAt: Date.now(),
+    }
+  }
+
+  /** Read the task object, trying each candidate route in base order. */
+  private async readTaskDetailObject(taskId: string): Promise<Record<string, unknown>> {
+    const failures: string[] = []
+    for (const endpoint of this.ordered(taskDetailCandidates(taskId))) {
+      try {
+        const response = await this.send(endpointUrl(endpoint), 'GET')
+        const single = readSingleObject(response.json)
+        if (single !== undefined && looksLikeResource(single)) return single
+        failures.push(`${endpoint.base}:${endpoint.path} -> no task object`)
+      } catch (error) {
+        failures.push(`${endpoint.base}:${endpoint.path} -> ${redactMessage(messageOf(error), this.cookie)}`)
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    throw new TeambitionApiError('api', `no task-detail endpoint answered: ${truncate(failures.join('; '), 400)}`)
+  }
+
+  /** Read the subtask collection; only the v2 route takes the paging query. */
+  private async readTaskSubtasks(taskId: string): Promise<readonly TeambitionSubtaskView[]> {
+    const failures: string[] = []
+    for (const endpoint of this.ordered(taskSubtaskCandidates(taskId))) {
+      try {
+        const url = endpoint.path.startsWith('/v2/')
+          ? endpointWithQuery(endpoint, { withSubtasks: true, excludeInTfsNode: false, pageSize: 200 })
+          : endpointUrl(endpoint)
+        const response = await this.send(url, 'GET')
+        return readSubtasks(response.json)
+      } catch (error) {
+        failures.push(`${endpoint.base}:${endpoint.path} -> ${redactMessage(messageOf(error), this.cookie)}`)
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    throw new TeambitionApiError('api', `no task-subtask endpoint answered: ${truncate(failures.join('; '), 400)}`)
+  }
+
+  /** Read the activity feed; only the v2 route takes the paging query. */
+  private async readTaskActivities(taskId: string): Promise<readonly TeambitionActivityView[]> {
+    const failures: string[] = []
+    for (const endpoint of this.ordered(taskActivityCandidates(taskId))) {
+      try {
+        const url = endpoint.path.startsWith('/v2/')
+          ? endpointWithQuery(endpoint, { limit: 1000, pageSize: 100 })
+          : endpointUrl(endpoint)
+        const response = await this.send(url, 'GET')
+        return readActivities(response.json)
+      } catch (error) {
+        failures.push(`${endpoint.base}:${endpoint.path} -> ${redactMessage(messageOf(error), this.cookie)}`)
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    throw new TeambitionApiError('api', `no task-activity endpoint answered: ${truncate(failures.join('; '), 400)}`)
+  }
+
+  /**
    * Create one task.
    * @param input - title, project and optional task list/stage/status/executor.
    * @returns the created task id and the endpoint that accepted it.
@@ -1038,6 +1148,248 @@ function readCreatedTaskId(payload: unknown): string | undefined {
     const inner = nested as Record<string, unknown>
     const id = stringOf(inner.id) ?? stringOf(inner._id) ?? stringOf(inner.taskId)
     if (id !== undefined) return id
+  }
+  return undefined
+}
+
+/**
+ * Build the card view of a detail payload.
+ *
+ * Mirrors the board card so the detail page and the rows stay consistent; the
+ * project name is a placeholder here because the client does not know project
+ * metadata, and the workspace is left out because only the service knows the
+ * bindings.
+ * @param task - card fields read from the remote task.
+ * @param subtaskCount - subtask count resolved from the route or the payload.
+ */
+function detailCardView(
+  task: TeambitionTask,
+  subtaskCount: number | undefined,
+): TeambitionCardView {
+  return {
+    id: task.id,
+    projectId: task.projectId,
+    projectName: task.projectId,
+    title: task.title,
+    ...(task.note === undefined ? {} : { note: task.note }),
+    ...(task.stageId === undefined ? {} : { stageId: task.stageId }),
+    ...(task.tasklistId === undefined ? {} : { tasklistId: task.tasklistId }),
+    ...(task.statusId === undefined ? {} : { statusId: task.statusId }),
+    ...(task.scenarioConfigId === undefined ? {} : { scenarioConfigId: task.scenarioConfigId }),
+    ...(task.isDone === undefined ? {} : { isDone: task.isDone }),
+    ...(task.updatedAt === undefined ? {} : { updatedAt: task.updatedAt }),
+    ...(task.priority === undefined ? {} : { priority: task.priority }),
+    ...(task.uniqueId === undefined ? {} : { uniqueId: task.uniqueId }),
+    ...(task.executorId === undefined ? {} : { executorId: task.executorId }),
+    ...(task.executorName === undefined ? {} : { executorName: task.executorName }),
+    ...(task.executorAvatarUrl === undefined ? {} : { executorAvatarUrl: task.executorAvatarUrl }),
+    ...(task.creatorId === undefined ? {} : { creatorId: task.creatorId }),
+    ...(task.dueAt === undefined ? {} : { dueAt: task.dueAt }),
+    ...(task.dueAtRaw === undefined ? {} : { dueAtRaw: task.dueAtRaw }),
+    ...(task.createdAt === undefined ? {} : { createdAt: task.createdAt }),
+    ...(subtaskCount === undefined
+      ? (task.subtaskCount === undefined ? {} : { subtaskCount: task.subtaskCount })
+      : { subtaskCount }),
+    ...(task.commentsCount === undefined ? {} : { commentsCount: task.commentsCount }),
+    url: cardUrl(task.projectId, task.id),
+  }
+}
+
+/** Plain-text description; Teambition returns it as the task `note`. */
+function readTaskNote(record: Record<string, unknown>): string {
+  return stringOf(record.note) ?? ''
+}
+
+/** Start date, story point and attachment count, when the payload carries them. */
+function readTaskTiming(record: Record<string, unknown>): {
+  startAtRaw?: string
+  storyPoint?: number
+  attachmentsCount?: number
+} {
+  const startAtRaw = stringOf(record.startDate) ?? stringOf(record.startAt)
+  const storyPoint = numberOf(record.storyPoint)
+  const attachmentsCount = numberOf(record.attachmentsCount)
+  return {
+    ...(startAtRaw === undefined ? {} : { startAtRaw }),
+    ...(storyPoint === undefined ? {} : { storyPoint }),
+    ...(attachmentsCount === undefined ? {} : { attachmentsCount }),
+  }
+}
+
+/**
+ * Subtask count, which Teambition states as a plain number on legacy payloads
+ * and as a `{ total, done }` summary on the v2 one.
+ */
+function readSubtaskTotal(record: Record<string, unknown>): number | undefined {
+  const value = record.subtaskCount
+  const direct = numberOf(value)
+  if (direct !== undefined) return direct
+  if (isRecord(value)) return numberOf(value.total) ?? numberOf(value.count)
+  return undefined
+}
+
+/** Read subtask rows, tolerating both envelope shapes and task-embedded lists. */
+function readSubtasks(payload: unknown): readonly TeambitionSubtaskView[] {
+  const collection = readCollection(payload)
+  if (collection === undefined) return []
+  const rows: TeambitionSubtaskView[] = []
+  const seen = new Set<string>()
+  for (const raw of collection) {
+    if (!isRecord(raw)) continue
+    const id = stringOf(raw.id) ?? stringOf(raw._id)
+    if (id === undefined || seen.has(id)) continue
+    const executorName = inlineMemberName(raw.executor)
+    const dueAtRaw = stringOf(raw.dueDate) ?? stringOf(raw.dueAt)
+    seen.add(id)
+    rows.push({
+      id,
+      title: collapseWhitespace(stringOf(raw.content) ?? stringOf(raw.title) ?? stringOf(raw.name) ?? id),
+      isDone: raw.isDone === true || raw.accomplished === true,
+      ...(executorName === undefined ? {} : { executorName }),
+      ...(dueAtRaw === undefined ? {} : { dueAtRaw }),
+    })
+  }
+  return rows
+}
+
+/** Read the activity feed; the API already localizes each `title` sentence. */
+function readActivities(payload: unknown): readonly TeambitionActivityView[] {
+  const collection = readCollection(payload)
+  if (collection === undefined) return []
+  const rows: TeambitionActivityView[] = []
+  const seen = new Set<string>()
+  for (const raw of collection) {
+    if (!isRecord(raw)) continue
+    const id = stringOf(raw.id) ?? stringOf(raw._id)
+    const action = stringOf(raw.action)
+    if (id === undefined || action === undefined || seen.has(id)) continue
+    const actorName = inlineMemberName(raw.creator) ?? inlineMemberName(raw.actor)
+    const createdAt = parseInstant(stringOf(raw.created) ?? stringOf(raw.createdAt))
+    const title = stringOf(raw.title) ?? stringOf(raw.content) ?? action
+    seen.add(id)
+    rows.push({
+      id,
+      title: collapseWhitespace(title),
+      action,
+      ...(actorName === undefined ? {} : { actorName }),
+      ...(createdAt === undefined ? {} : { createdAt }),
+    })
+  }
+  return rows
+}
+
+/**
+ * Display names of the participants.
+ *
+ * `involvers` carries member objects while `involveMembers` only carries ids:
+ * ids are resolved against every inline member of the same payload, and an id
+ * nothing names contributes nothing rather than a raw id in the UI.
+ */
+function readInvolverNames(record: Record<string, unknown>): readonly string[] {
+  const names: string[] = []
+  const seen = new Set<string>()
+  const directory = new Map<string, string>()
+  const remember = (raw: unknown): string | undefined => {
+    if (!isRecord(raw)) return undefined
+    const name = inlineMemberName(raw)
+    if (name === undefined) return undefined
+    for (const key of ['id', '_id']) {
+      const id = stringOf(raw[key])
+      if (id !== undefined && !directory.has(id)) directory.set(id, name)
+    }
+    return name
+  }
+  const push = (name: string | undefined): void => {
+    if (name === undefined || seen.has(name)) return
+    seen.add(name)
+    names.push(name)
+  }
+  for (const raw of arrayOf(record.involvers)) {
+    const name = typeof raw === 'string' ? directory.get(raw) : remember(raw)
+    push(name)
+  }
+  if (names.length > 0) return names
+  for (const key of ['creator', 'executor']) {
+    const member = record[key]
+    const id = isRecord(member) ? stringOf(member.id) ?? stringOf(member._id) : undefined
+    const name = remember(member)
+    if (id !== undefined && name !== undefined && !directory.has(id)) directory.set(id, name)
+  }
+  for (const raw of arrayOf(record.involveMembers)) {
+    if (typeof raw === 'string') {
+      push(directory.get(raw))
+      continue
+    }
+    const name = remember(raw)
+    push(name)
+  }
+  return names
+}
+
+/** Read the custom field rows, skipping fields without a readable value. */
+function readCustomFields(record: Record<string, unknown>): readonly TeambitionCustomFieldView[] {
+  const rows: TeambitionCustomFieldView[] = []
+  const seen = new Set<string>()
+  for (const raw of arrayOf(record.customfields ?? record.customFields)) {
+    if (!isRecord(raw)) continue
+    const name = stringOf(raw.title) ?? stringOf(raw.name) ?? stringOf(raw._id)
+    if (name === undefined) continue
+    const value = stringifyFieldValue(raw.value ?? raw.values)
+    if (value === undefined) continue
+    const label = collapseWhitespace(name)
+    if (label === '' || seen.has(label)) continue
+    seen.add(label)
+    rows.push({ name: label, value })
+  }
+  return rows
+}
+
+/** Render one custom field value (string, number, choice list, member) as text. */
+function stringifyFieldValue(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const text = value.trim()
+    return text === '' ? undefined : text
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    const parts: string[] = []
+    for (const entry of value) {
+      const part = stringifyFieldValue(entry)
+      if (part !== undefined) parts.push(part)
+    }
+    return parts.length === 0 ? undefined : parts.join(', ')
+  }
+  if (isRecord(value)) {
+    const inner = stringifyFieldValue(value.value ?? value.name ?? value.title)
+    if (inner !== undefined) return inner
+    return truncate(JSON.stringify(value), 200)
+  }
+  return undefined
+}
+
+/** Display name of an inline member object, else undefined. */
+function inlineMemberName(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined
+  const name = stringOf(raw.name) ?? stringOf(raw.displayName)
+  return name === undefined ? undefined : collapseWhitespace(name)
+}
+
+/** Array view of an optional collection. */
+function arrayOf(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+/** Whether a parsed payload is one plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Finite number, accepting numeric strings from legacy payloads. */
+function numberOf(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : undefined
   }
   return undefined
 }

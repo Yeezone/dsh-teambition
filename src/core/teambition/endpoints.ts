@@ -250,6 +250,64 @@ export function taskStageUpdateCandidates(taskId: string): readonly TeambitionEn
   ]
 }
 
+/**
+ * Candidates that read one task in full. The web client opens its detail panel
+ * with `GET /api/tasks/{id}`, which carries the description, participants, task
+ * type, workflow status and custom fields in one payload.
+ * @param taskId - remote task id.
+ */
+export function taskDetailCandidates(taskId: string): readonly TeambitionEndpoint[] {
+  const id = encodeURIComponent(taskId)
+  return [{ id: 'task-detail-legacy-web', base: 'web', path: `/tasks/${id}`, purpose: 'one task in full through the www proxy' }]
+}
+
+/**
+ * Candidates that list one task's subtasks. The v2 route pages with a
+ * `pageToken`; a task carries at most a few hundred subtasks, so one page of
+ * 200 is enough, and the caller falls back to the embedded `subtasks` array.
+ * @param taskId - remote task id.
+ */
+export function taskSubtaskCandidates(taskId: string): readonly TeambitionEndpoint[] {
+  const id = encodeURIComponent(taskId)
+  return [
+    {
+      id: 'task-subtasks-v2-web',
+      base: 'web',
+      path: `/v2/tasks/${id}/subtasks`,
+      purpose: 'the subtask list through the www proxy',
+    },
+    {
+      id: 'task-subtasks-legacy-web',
+      base: 'web',
+      path: `/tasks/${id}/subtasks`,
+      purpose: 'the legacy subtask list through the www proxy',
+    },
+  ]
+}
+
+/**
+ * Candidates that read one task's activity feed. The v2 route pages by
+ * `limit`; the detail page renders the newest entries first.
+ * @param taskId - remote task id.
+ */
+export function taskActivityCandidates(taskId: string): readonly TeambitionEndpoint[] {
+  const id = encodeURIComponent(taskId)
+  return [
+    {
+      id: 'task-activities-v2-web',
+      base: 'web',
+      path: `/v2/tasks/${id}/activities`,
+      purpose: 'the task activity feed through the www proxy',
+    },
+    {
+      id: 'task-activities-legacy-web',
+      base: 'web',
+      path: `/tasks/${id}/activities`,
+      purpose: 'the legacy task activity feed through the www proxy',
+    },
+  ]
+}
+
 /** Project-list candidate ids, used to decide whether a probe result is one. */
 const PROJECT_PROBE_IDS = new Set(PROJECT_LIST_CANDIDATES.map(endpoint => endpoint.id))
 

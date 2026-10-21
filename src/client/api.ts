@@ -18,6 +18,7 @@ import type {
   TeambitionProjectsView,
   TeambitionStateView,
   TeambitionTaskCreateRequest,
+  TeambitionTaskDetailView,
   TeambitionTaskStageRequest,
   TeambitionTaskStatusRequest,
 } from '../core/protocol.ts'
@@ -98,6 +99,12 @@ export interface TeambitionApiFace {
    * @param viewId - saved view whose columns/filters to resolve; absent means the default view.
    */
   fetchProject(projectId: string, tasklistId?: string, viewId?: string): Promise<TeambitionApiResult<TeambitionProjectDetail>>
+  /**
+   * One task page: card fields plus note, subtasks, activity feed and custom fields.
+   * @param projectId - Teambition project id.
+   * @param taskId - Teambition card (task) id.
+   */
+  fetchTaskDetail(projectId: string, taskId: string): Promise<TeambitionApiResult<TeambitionTaskDetailView>>
   /** Create a card in a project. */
   createTask(request: TeambitionTaskCreateRequest): Promise<TeambitionApiResult<TeambitionTaskCreateView>>
   /** Move a card to another workflow status. */
@@ -132,6 +139,10 @@ export class TeambitionApi implements TeambitionApiFace {
       ...(tasklistId === undefined ? {} : { tasklistId }),
       ...(viewId === undefined ? {} : { viewId }),
     })
+  }
+
+  fetchTaskDetail(projectId: string, taskId: string): Promise<TeambitionApiResult<TeambitionTaskDetailView>> {
+    return post<TeambitionTaskDetailView>(TEAMBITION_ROUTES.taskDetail, { projectId, taskId })
   }
 
   createTask(request: TeambitionTaskCreateRequest): Promise<TeambitionApiResult<TeambitionTaskCreateView>> {

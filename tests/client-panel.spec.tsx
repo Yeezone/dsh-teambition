@@ -26,6 +26,7 @@ import type {
   TeambitionSettingsView,
   TeambitionStateView,
   TeambitionStatusView,
+  TeambitionTaskDetailView,
   TeambitionViewView,
   TeambitionWorkflowView,
 } from '../src/core/protocol.ts'
@@ -197,6 +198,36 @@ const DETAIL_TASKS_SCENARIO: TeambitionProjectDetail = {
   cards: DETAIL_TASKS.cards.map(card => card.id === 't1' ? { ...card, scenarioConfigId: SCENARIO.id } : card),
 }
 
+/**
+ * The task page payload of t1: the description, creator, participants, custom
+ * fields, subtasks and the newest-first activity feed the page renders on top of
+ * the card fields every list already has.
+ */
+const TASK_DETAIL: TeambitionTaskDetailView = {
+  card: DETAIL.cards[0],
+  note: '对接统一登录，先覆盖账号密码。',
+  creatorName: '林岚',
+  involverNames: ['安阳', '陈默'],
+  startAtRaw: '2026-10-02T00:00:00Z',
+  storyPoint: 5,
+  customFields: [{ name: '客户', value: '阿波罗' }],
+  subtasks: [
+    { id: 'sub1', title: '梳理登录接口', isDone: true },
+    { id: 'sub2', title: '接入账号密码登录', isDone: false, executorName: '安阳' },
+  ],
+  activities: [
+    {
+      id: 'act1',
+      title: '安阳 将任务状态从 未开始 改为 进行中',
+      action: 'activity.task.update.taskflowstatus.v2',
+      actorName: '安阳',
+      createdAt: Date.parse('2026-10-20T03:00:00Z'),
+    },
+  ],
+  attachmentsCount: 2,
+  fetchedAt: Date.parse('2026-10-21T05:00:00Z'),
+}
+
 const DIAGNOSTICS: TeambitionDiagnostics = {
   probedAt: Date.parse('2026-10-21T05:00:00Z'),
   cookieConfigured: true,
@@ -216,7 +247,7 @@ function stateView(settings: Partial<TeambitionSettingsView> = {}): TeambitionSt
 }
 
 /** Fake route client plus the service spies a test asserts on. */
-function harness(state: TeambitionStateView = stateView(), detail: TeambitionProjectDetail = DETAIL) {
+function harness(state: TeambitionStateView = stateView(), detail: TeambitionProjectDetail = DETAIL, taskDetail: TeambitionTaskDetailView = TASK_DETAIL) {
   const prompt = vi.fn(async (_blocks: unknown, _mode: string) => ({ ok: true }))
   const release = vi.fn()
   const create = vi.fn(async (_options: { workspaceId: string }) => 'session-1')
@@ -226,12 +257,14 @@ function harness(state: TeambitionStateView = stateView(), detail: TeambitionPro
   const setTaskStage = vi.fn(async (_request: unknown) => ok<Record<string, never>>({}))
   const saveBindings = vi.fn(async (_request: unknown) => ok(stateView()))
   const fetchProject = vi.fn(async (_projectId: string, _tasklistId?: string, _viewId?: string) => ok(detail))
+  const fetchTaskDetail = vi.fn(async (_projectId: string, _taskId: string) => ok(taskDetail))
   const api: TeambitionApiFace = {
     fetchState: vi.fn(async () => ok(state)),
     saveConfig: vi.fn(async () => ok(state)),
     diagnose: vi.fn(async () => ok({ diagnostics: DIAGNOSTICS })),
     refreshProjects: vi.fn(async () => ok({ projects: [PROJECT] })),
     fetchProject,
+    fetchTaskDetail,
     createTask,
     setTaskStatus,
     setTaskStage,
@@ -252,7 +285,7 @@ function harness(state: TeambitionStateView = stateView(), detail: TeambitionPro
     },
   }
   const uiWorkspace: UiWorkspaceFace = { openSession }
-  return { api, sessions, workspaces, uiWorkspace, create, prompt, release, openSession, fetchProject, createTask, setTaskStatus, setTaskStage, saveBindings }
+  return { api, sessions, workspaces, uiWorkspace, create, prompt, release, openSession, fetchProject, fetchTaskDetail, createTask, setTaskStatus, setTaskStage, saveBindings }
 }
 
 const roots: Root[] = []
@@ -907,41 +940,99 @@ describe('TeambitionPanel task module', () => {
     expect(rows(container)[0].textContent).toContain('补充埋点')
   })
 
-  it('opens the detail drawer and runs the task from it', async () => {
+  it('opens the task detail page from a row and runs the task from it', async () => {
     const { h, container } = await mountTasks()
     const legacy = rows(container)[2]
     await act(async () => { legacy.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
-    const drawer = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
-    expect(drawer).not.toBeNull()
-    expect(drawer.textContent).toContain('接入登录接口')
-    expect(drawer.textContent).toContain('#79')
-    expect(drawer.textContent).toContain('安阳')
-    expect(drawer.textContent).toContain(zh['detail.note'])
-    expect(drawer.textContent).toContain('对接统一登录，先覆盖账号密码。')
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    expect(page).not.toBeNull()
+    expect(page.getAttribute('role')).toBe('dialog')
+    expect(h.fetchTaskDetail).toHaveBeenCalledWith('p1', 't1')
+    await until(() => page.getAttribute('data-phase') === 'ready', 'the loaded task page')
 
-    const run = buttonByText(drawer, zh['card.run'])
-    expect(run).toBeDefined()
-    await click(run as HTMLButtonElement)
+    // Card fields the list already had render at once.
+    expect(page.textContent).toContain('接入登录接口')
+    expect(page.textContent).toContain('#79')
+    expect(page.textContent).toContain('安阳')
+    expect(page.querySelector('[data-dsh-part="detail-props"]')?.textContent).toContain(zh['tasks.state'])
+
+    // The blocks only `teambition/task/detail` carries: description, creator,
+    // participants, custom fields, subtasks and the activity feed.
+    expect(page.querySelector('[data-dsh-part="detail-note"]')?.textContent).toContain('对接统一登录，先覆盖账号密码。')
+    expect(page.textContent).toContain(zh['detail.creator'])
+    expect(page.textContent).toContain('林岚')
+    expect(page.textContent).toContain(zh['detail.involvers'])
+    expect(page.textContent).toContain('陈默')
+    expect(page.querySelector('[data-dsh-part="detail-custom-fields"]')?.textContent).toContain('客户')
+    expect(page.querySelector('[data-dsh-part="detail-subtasks"]')?.textContent).toContain('梳理登录接口')
+    expect(page.querySelector('[data-dsh-part="detail-activities"]')?.textContent).toContain('安阳 将任务状态从 未开始 改为 进行中')
+    expect(page.querySelector('[data-dsh-part="detail-open-external"]')?.getAttribute('href')).toBe(
+      'https://www.teambition.com/project/p1/tasks/t1',
+    )
+
+    const run = page.querySelector('[data-dsh-part="detail-run"]') as HTMLButtonElement
+    await click(run)
     await until(() => h.openSession.mock.calls.length > 0, 'the created session to open')
     expect(h.create.mock.calls[0][0]).toEqual({ workspaceId: 'ws-1' })
     const blocks = h.prompt.mock.calls[0][0] as Array<{ type: string; text: string }>
     expect(blocks[0].text).toContain('接入登录接口')
 
-    await click(buttonByText(drawer, zh['detail.close']) as HTMLButtonElement)
+    // Escape closes the page without touching the surface underneath.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
     expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+    expect(container.querySelector('[data-dsh-part="task-table"]')).not.toBeNull()
   })
 
-  it('shows the task type of a workflow card in the drawer facts', async () => {
-    const { container } = await mountTasks(DETAIL_TASKS_SCENARIO)
-    const legacy = rows(container)[2]
-    await act(async () => { legacy.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  it('fills the page from the host payload and retries after a failure', async () => {
+    const { h, container } = await mountTasks()
+    const empty: TeambitionTaskDetailView = { ...TASK_DETAIL, note: '', subtasks: [], activities: [] }
+    h.api.fetchTaskDetail = vi.fn(async () => ({
+      ok: false as const,
+      error: { message: 'route exploded' },
+    }))
+    await act(async () => { rows(container)[2].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
-    const drawer = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
-    expect(drawer.textContent).toContain(zh['board.scenario'])
-    expect(drawer.textContent).toContain(SCENARIO.name)
-    // The drawer also names the column the card sits in (stage view: the stage).
-    expect(drawer.textContent).toContain('待办')
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    await until(() => page.getAttribute('data-phase') === 'failed', 'the failed task page')
+    expect(page.querySelector('[data-dsh-part="detail-error"]')?.textContent).toContain('route exploded')
+
+    h.api.fetchTaskDetail = vi.fn(async () => ({ ok: true as const, value: empty }))
+    await click(page.querySelector('[data-dsh-part="detail-retry"]') as HTMLButtonElement)
+    await until(() => page.getAttribute('data-phase') === 'ready', 'the retried task page')
+    expect(container.querySelector('[data-dsh-part="detail-error"]')).toBeNull()
+    // An empty payload still explains itself instead of rendering blank blocks.
+    expect(container.querySelector('[data-dsh-part="detail-note"]')?.textContent).toContain(zh['detail.emptyNote'])
+    expect(container.querySelector('[data-dsh-part="detail-subtasks"]')?.textContent).toContain(zh['detail.emptySubtasks'])
+    expect(container.querySelector('[data-dsh-part="detail-activities"]')?.textContent).toContain(zh['detail.emptyActivities'])
+  })
+
+  it('moves the card to its end status from the page footer', async () => {
+    const { h, container } = await mountTasks()
+    await act(async () => { rows(container)[2].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    await until(() => page.getAttribute('data-phase') === 'ready', 'the loaded task page')
+
+    // t1 sits in 进行中, so the footer offers the end status (已完成).
+    await click(page.querySelector('[data-dsh-part="detail-complete"]') as HTMLButtonElement)
+    await until(() => h.setTaskStatus.mock.calls.length > 0, 'the status write')
+    expect(h.setTaskStatus.mock.calls[0][0]).toEqual({ taskId: 't1', statusId: 'st3' })
+    // The page is still open while the board refetches behind it.
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).not.toBeNull()
+  })
+
+  it('shows the task type of a workflow card on the task page', async () => {
+    const h = harness(stateView(), DETAIL_TASKS_SCENARIO, { ...TASK_DETAIL, card: DETAIL_TASKS_SCENARIO.cards[0] })
+    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => rows(container).length > 0, 'the task rows')
+    await act(async () => { rows(container)[2].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    await until(() => page.getAttribute('data-phase') === 'ready', 'the loaded task page')
+    expect(page.textContent).toContain(zh['detail.scenario'])
+    expect(page.textContent).toContain(SCENARIO.name)
+    // The page names the column the card sits in (stage view: the stage).
+    expect(page.textContent).toContain('待办')
   })
 
   it('remembers the task view settings for the next visit', async () => {
@@ -1002,5 +1093,60 @@ describe('TeambitionPanel task module', () => {
     expect(rows(container)).toHaveLength(2)
     // Both remaining open tasks sit in the same column.
     expect(container.querySelectorAll('[data-dsh-part="task-group"]')).toHaveLength(1)
+  })
+})
+
+describe('TeambitionPanel task page entry points', () => {
+  it('opens the task page when a board card is clicked', async () => {
+    const h = harness(stateView(), DETAIL_TASKS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
+
+    const card = container.querySelector('[data-dsh-part="card"]') as HTMLElement
+    await act(async () => { card.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    expect(page).not.toBeNull()
+    expect(h.fetchTaskDetail).toHaveBeenCalledWith('p1', 't1')
+    // The board stays mounted behind the page so closing returns to it.
+    expect(container.querySelector('[data-dsh-part="board"]')).not.toBeNull()
+
+    await click(page.querySelector('[data-dsh-part="detail-close"]') as HTMLButtonElement)
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+    expect(container.querySelector('[data-dsh-part="board"]')).not.toBeNull()
+  })
+
+  it('keeps the card\'s own controls from opening the page', async () => {
+    const h = harness(stateView(), DETAIL_TASKS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
+
+    const card = container.querySelector('[data-dsh-part="card"]') as HTMLElement
+    await click(buttonByText(card, zh['card.run']) as HTMLButtonElement)
+    await until(() => h.openSession.mock.calls.length > 0, 'the card run to start')
+
+    // Running from the card is a card action, not an "open the task page" click.
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+    expect(h.fetchTaskDetail).not.toHaveBeenCalled()
+  })
+
+  it('closes the page on a backdrop click and keeps the Teambition link in the footer', async () => {
+    const h = harness(stateView(), DETAIL_TASKS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
+    await act(async () => {
+      (container.querySelector('[data-dsh-part="card"]') as HTMLElement)
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const page = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    await until(() => page.getAttribute('data-phase') === 'ready', 'the loaded task page')
+    expect(page.querySelector('[data-dsh-part="detail-open-teambition"]')?.getAttribute('href')).toBe(
+      'https://www.teambition.com/project/p1/tasks/t1',
+    )
+
+    const overlay = container.querySelector('[data-dsh-part="task-detail-overlay"]') as HTMLElement
+    await act(async () => { overlay.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
   })
 })
