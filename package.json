@@ -1,7 +1,7 @@
 {
   "name": "@yeezone/dsh-client-ui-teambition",
   "description": "Teambition panel for the DSH Web GUI: browse projects and cards from the sidebar, create/move/complete cards, and run any card in a chosen DSH workspace.",
-  "version": "0.1.4",
+  "version": "0.1.0",
   "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",

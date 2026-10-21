@@ -40,6 +40,20 @@ plugin, mounted as a profile bundle without modifying the DSH source checkout.
 - Card execution creates a session through the public session-controller
   service and releases the retained reference after the prompt is submitted.
 
+## Branches and versions
+
+- `main` is the development trunk. `v0.1` is the frozen `v0.1` release line; a
+  newer line gets its own `vX.Y` branch.
+- Never commit a feature or fix straight to `main` or a release line. Work on
+  `feat/<slug>` or `fix/<slug>` and merge through a pull request.
+- Every change that lands on `main` bumps `package.json` `version` (feature →
+  minor, fix → patch, breaking → major) and adds a `CHANGELOG.md` entry in the
+  same pull request.
+- Release lines only receive cherry-picked fixes and ship them as patch tags.
+- Tag a release only after `main` CI is green: annotated tag `v<version>`
+  (for example `v0.2.0`) plus a GitHub Release written from `CHANGELOG.md`.
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for the full flow.
+
 ## Layout
 
 - `src/index.ts` - host entry (webServer routes, agent tool, mount-once).
