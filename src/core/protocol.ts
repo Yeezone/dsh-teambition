@@ -39,6 +39,8 @@ export const TEAMBITION_ROUTES = {
   taskStage: 'teambition/task/stage',
   /** Persist per-card / per-project workspace bindings. */
   bind: 'teambition/bind',
+  /** One card in full: properties, description, subtasks and activity feed. */
+  taskDetail: 'teambition/task/detail',
 } as const
 
 /** One project's default DSH workspace. */
@@ -194,6 +196,66 @@ export interface TeambitionCardView {
   readonly workspaceSource?: 'card' | 'project' | 'default'
   /** Web link to the card. */
   readonly url: string
+}
+
+/** One subtask row of the task detail page. */
+export interface TeambitionSubtaskView {
+  readonly id: string
+  readonly title: string
+  readonly isDone: boolean
+  /** Executor display name, when the subtask has one. */
+  readonly executorName?: string
+  /** Due date as returned by the API (ISO string). */
+  readonly dueAtRaw?: string
+}
+
+/** One entry of the task detail activity feed. */
+export interface TeambitionActivityView {
+  readonly id: string
+  /** Localized sentence the API already assembled, e.g. `安阳 将任务状态从 …`. */
+  readonly title: string
+  /** Raw action key, e.g. `activity.task.update.taskflowstatus.v2`. */
+  readonly action: string
+  /** Display name of the actor. */
+  readonly actorName?: string
+  /** `created` instant in ms. */
+  readonly createdAt?: number
+}
+
+/** One custom field rendered on the detail page. */
+export interface TeambitionCustomFieldView {
+  readonly name: string
+  readonly value: string
+}
+
+/**
+ * `teambition/task/detail` response: everything the task page shows. The card
+ * carries the same fields the board/task list use, so the page and the rows stay
+ * consistent; the extra blocks only exist on this payload.
+ */
+export interface TeambitionTaskDetailView {
+  readonly card: TeambitionCardView
+  /** Plain-text description (Teambition's `note`). */
+  readonly note: string
+  /** Display name of the creator. */
+  readonly creatorName?: string
+  /** Display names of the participants (`involveMembers`). */
+  readonly involverNames: readonly string[]
+  /** Start date as returned by the API (ISO string). */
+  readonly startAtRaw?: string
+  readonly storyPoint?: number
+  readonly customFields: readonly TeambitionCustomFieldView[]
+  readonly subtasks: readonly TeambitionSubtaskView[]
+  readonly activities: readonly TeambitionActivityView[]
+  readonly attachmentsCount?: number
+  /** Epoch ms the host assembled this payload. */
+  readonly fetchedAt: number
+}
+
+/** `teambition/task/detail` request. */
+export interface TeambitionTaskDetailRequest {
+  readonly projectId: string
+  readonly taskId: string
 }
 
 /** One project with everything the panel needs to render it. */

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { TeambitionDiagnostics, TeambitionEndpoint, TeambitionProject, TeambitionTask, TeambitionTasklist, TeambitionWorkflowStatus } from '../src/core/teambition/index.ts'
-import { cardUrl } from '../src/core/protocol.ts'
+import { cardUrl, type TeambitionTaskDetailView } from '../src/core/protocol.ts'
 import { TeambitionApiError, type TeambitionScenarioConfig, type TeambitionView, type TeambitionWorkflow } from '../src/host/client.ts'
 import { TeambitionConfigStore, type TeambitionHostState } from '../src/host/config-store.ts'
 import {
@@ -75,6 +75,17 @@ const VIEWS: readonly TeambitionView[] = [
   { id: 'v-status', name: 'Status board', vertical: 'status', scenarioConfigIds: ['sc1'] },
 ]
 
+/** Detail payload the fake client answers for any card. */
+const TASK_DETAIL: TeambitionTaskDetailView = {
+  card: { id: 't1', projectId: 'p1', projectName: 'p1', title: 'First', url: cardUrl('p1', 't1') },
+  note: '',
+  involverNames: [],
+  customFields: [],
+  subtasks: [],
+  activities: [],
+  fetchedAt: NOW,
+}
+
 let root: string
 let store: TeambitionConfigStore
 let calls: { listProjects: number; updateTaskStatus: string[][]; updateTaskStage: string[][]; createTask: unknown[] }
@@ -95,6 +106,7 @@ function createFakeClient(overrides: Partial<TeambitionClientPort> = {}): Teambi
     updateTaskStatus: async (taskId, statusId) => { calls.updateTaskStatus.push([taskId, statusId]) },
     updateTaskStage: async (taskId, stageId) => { calls.updateTaskStage.push([taskId, stageId]) },
     createTask: async input => { calls.createTask.push(input); return { taskId: 't-new' } },
+    taskDetail: async () => TASK_DETAIL,
     ...overrides,
   }
 }
@@ -468,6 +480,46 @@ describe('writes', () => {
     await expect(service.setStage({ taskId: 't1', stageId: 's2' })).rejects.toBeInstanceOf(TeambitionHostError)
     const view = await service.stateView()
     expect(view.settings.lastError).toMatch(/stage update was refused/)
+  })
+})
+
+describe('taskDetail', () => {
+  it('resolves the project name and workspace of the card', async () => {
+    const service = createService(createFakeClient({
+      taskDetail: async () => ({ ...TASK_DETAIL, card: { ...TASK_DETAIL.card } }),
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret', cardBindings: [{ taskId: 't1', workspaceId: 'ws-card' }] })
+    await service.listProjects()
+    const detail = await service.taskDetail({ projectId: 'p1', taskId: 't1' })
+    expect(detail.card.projectName).toBe('Project One')
+    expect(detail.card.workspaceId).toBe('ws-card')
+    expect(detail.card.workspaceSource).toBe('card')
+    expect(detail.fetchedAt).toBe(NOW)
+    const view = await service.stateView()
+    expect(view.settings.lastSyncAt).toBe(NOW)
+  })
+
+  it('falls back to the project binding for the workspace', async () => {
+    const service = createService(createFakeClient())
+    await service.updateConfig({ cookie: 'SESS=secret', projectBindings: [{ projectId: 'p1', workspaceId: 'ws-project' }] })
+    const detail = await service.taskDetail({ projectId: 'p1', taskId: 't1' })
+    expect(detail.card.workspaceId).toBe('ws-project')
+    expect(detail.card.workspaceSource).toBe('project')
+  })
+
+  it('refuses to read a card without a cookie', async () => {
+    const service = createService(createFakeClient())
+    await expect(service.taskDetail({ projectId: 'p1', taskId: 't1' })).rejects.toMatchObject({ code: 'not-configured' })
+  })
+
+  it('persists lastError when the detail read fails', async () => {
+    const service = createService(createFakeClient({
+      taskDetail: async () => { throw new TeambitionApiError('api', 'detail route was refused') },
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    await expect(service.taskDetail({ projectId: 'p1', taskId: 't1' })).rejects.toBeInstanceOf(TeambitionHostError)
+    const view = await service.stateView()
+    expect(view.settings.lastError).toMatch(/detail route was refused/)
   })
 })
 

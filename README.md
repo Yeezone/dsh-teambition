@@ -9,7 +9,7 @@ and submits the card's title, project, link, updated time and note as the openin
 prompt.
 
 - Repository: <https://github.com/Yeezone/dsh-teambition>
-- Latest release: `v0.1` (`0.1.0`); `main` is at `0.5.0`
+- Latest release: `v0.1` (`0.1.0`); `main` is at `0.7.0`
 - License: Apache-2.0
 
 ## Why it exists
@@ -39,9 +39,11 @@ default, then the panel-wide default workspace.
   task number, title, assignee avatar and name, due date (red when overdue), stage
   and last update. The toolbar searches, groups by task list / stage / assignee,
   filters by open / done / overdue / unassigned state, and sorts by updated,
-  created, due or priority. Clicking a row slides a detail drawer in from the
-  right (number, priority, assignee, due, stage, task list, created / updated,
-  note body) which can also run the card, complete it and rebind its workspace.
+  created, due or priority. Clicking a row opens the task page: a two-column
+  property grid (state, assignee, creator, participants, priority, story points,
+  start, due, stage, task list, task type, created / updated, attachments), the
+  note, the (read-only) sub-tasks, the activity feed and custom fields, plus the
+  same run / complete / rebind actions as the board.
 - **Board**: the project views of the Teambition web board (for example "All
   tasks", a workflow-status view, "My tasks", "Created by me") in a rail on the
   left. A view saved with a workflow vertical renders one column per workflow
@@ -53,6 +55,10 @@ default, then the panel-wide default workspace.
   another column to move it there (workflow status or stage, by the column kind).
 - **New card form** at the bottom of the panel: title, optional note, target
   stage.
+- **Task page**: opens from a board card or from a task-list row and mirrors the
+  Teambition task module: properties, note, sub-tasks, activity feed, custom
+  fields, and the same release actions. Escape, the close button or the backdrop
+  close it.
 - **Settings view**: cookie (write / clear), diagnose probes, operator id,
   endpoint base, default view (task list / board), default workspace, and a
   per-project workspace table.
@@ -60,7 +66,7 @@ default, then the panel-wide default workspace.
 ## Features
 
 - Task module: a task table (number, title, assignee, due, stage, update time)
-  with search / grouping / filtering / sorting and a slide-over detail drawer; the
+  with search / grouping / filtering / sorting and a full task page; the
   chosen view and toolbar settings persist in `localStorage`.
 - Task-list filter: when a project has several lists, the toolbar narrows the
   table to one of them; switching project clears it back to every list.
@@ -82,7 +88,7 @@ default, then the panel-wide default workspace.
 - Card actions: run in DSH, complete the card or advance it to the next open
   workflow status, open in Teambition, bind an execution workspace. Completed
   cards are checked (green check, struck-through title on the board, a "done"
-  badge in the task list, a state row in the drawer).
+  badge in the task list, a state row in the task page).
 - Workspace bindings with card > project > panel-default precedence, resolved by
   the host so the browser half never needs the full binding table.
 - Diagnostics: six candidate endpoints are probed one by one and the HTTP status

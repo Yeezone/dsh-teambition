@@ -4,6 +4,41 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-10-21
+
+### Added
+
+- A full task page, opened from a board card or a task-list row: two-column
+  property grid (state, executor, creator, participants, priority, story
+  points, start, due, column, task list, task type, created/updated,
+  attachments, subtasks), the task note, read-only subtasks, the activity feed
+  (newest first, capped at 30 entries) and custom fields. The page loads
+  `teambition/task/detail`, shows a skeleton while the host answers, keeps the
+  card data visible when the load fails and offers retry.
+- `teambition/task/detail` host route plus a `task-detail` action on the agent
+  tool. It fetches the task, its subtasks and its activities in parallel, and
+  falls back to the v2 endpoints' legacy variants; a failing subtask or
+  activity request degrades to the embedded data instead of failing the page.
+- Dialog semantics for the page: `role="dialog"`, `aria-modal`, labelled by the
+  task title, focus on the close button, close with Escape, the backdrop or the
+  close button.
+- 16 new zh/en locale keys for the page sections, with the same release actions
+  as before (run in a workspace, advance the status, bind a workspace, open in
+  Teambition).
+
+### Changed
+
+- The detail page merges the workflow status into the single "State" row for
+  workflow projects, since the board column and the workflow status are the
+  same value there; stage projects keep a separate "Stage" row.
+- Priority labels now share the board mapping: the Teambition default (-10) is
+  hidden instead of being printed as "priority -10".
+
+### Tests
+
+- 165 tests across 8 files (client panel 39, client api 10, client locales 7,
+  host client 23, host routes 24, host service 34, host agent tool 16).
+
 ## [0.6.0] - 2026-10-21
 
 ### Added

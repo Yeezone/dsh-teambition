@@ -2,10 +2,11 @@
  * The model-visible `teambition` tool.
  *
  * One tool, thin over the host service: it inspects state, probes the
- * endpoints, lists projects and cards, creates a card, changes a card's
- * workflow status or stage, and binds a workspace. The cookie is accepted as
- * an explicit argument but never returned; failures stay inside the JSON
- * envelope so the model can read and correct them instead of seeing a throw.
+ * endpoints, lists projects and cards, reads one card in full, creates a card,
+ * changes a card's workflow status or stage, and binds a workspace. The cookie
+ * is accepted as an explicit argument but never returned; failures stay inside
+ * the JSON envelope so the model can read and correct them instead of seeing a
+ * throw.
  *
  * @module dsh-teambition/host/agent-tool
  */
@@ -56,6 +57,7 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
       'action=projects lists the projects the user has joined.',
       'action=project lists one project with its task lists, stages, saved views, workflows, task types, resolved board columns and cards; each card carries the workspace resolution the panel would use. Pass a saved view id to render its columns: a status view renders the workflow-status columns of its task types.',
       'Kanban columns belong to task lists (a project has several lists, each with its own columns): pass an optional tasklistId to action=project to narrow the detail to one list, and to action=create-task to place the card in that list.',
+      'action=task-detail reads one card in full (projectId and taskId required): the resolved card plus description, creator, participants, start date, story point, custom fields, subtasks, activity feed and attachment count; read-only.',
       'action=create-task creates a card (projectId and title required; note, tasklistId, stageId, statusId, scenarioConfigId and executorId optional) and is an explicit user write. Workflow projects require the task type (scenarioConfigId) when the card is created into a workflow status.',
       'action=set-status moves a card to a workflow status (taskId and statusId required).',
       'action=set-stage moves a card to a kanban stage (taskId and stageId required).',
@@ -67,11 +69,11 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
       action: {
         type: 'string',
         required: true,
-        enum: ['status', 'diagnose', 'projects', 'project', 'create-task', 'set-status', 'set-stage', 'bind-workspace'],
+        enum: ['status', 'diagnose', 'projects', 'project', 'task-detail', 'create-task', 'set-status', 'set-stage', 'bind-workspace'],
         description: 'The operation to perform.',
       },
-      projectId: { type: 'string', description: 'project, create-task and bind-workspace: Teambition project id.' },
-      taskId: { type: 'string', description: 'set-status, set-stage and bind-workspace: Teambition task id.' },
+      projectId: { type: 'string', description: 'project, task-detail, create-task and bind-workspace: Teambition project id.' },
+      taskId: { type: 'string', description: 'task-detail, set-status, set-stage and bind-workspace: Teambition task id.' },
       title: { type: 'string', description: 'create-task: card title.' },
       note: { type: 'string', description: 'create-task: optional card note.' },
       tasklistId: { type: 'string', description: 'project and create-task: optional Teambition task list id; columns belong to a task list, and create-task places the card in it.' },
@@ -106,6 +108,11 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
               ...(args.tasklistId === undefined ? {} : { tasklistId: args.tasklistId }),
               ...(args.viewId === undefined ? {} : { viewId: args.viewId }),
             }))
+          }
+          case 'task-detail': {
+            if (args.projectId === undefined) return refused('invalid-request', 'projectId is required')
+            if (args.taskId === undefined) return refused('invalid-request', 'taskId is required')
+            return view(await service.taskDetail({ projectId: args.projectId, taskId: args.taskId }))
           }
           case 'create-task': {
             if (args.projectId === undefined) return refused('invalid-request', 'projectId is required')

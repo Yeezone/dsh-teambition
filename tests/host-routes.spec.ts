@@ -100,6 +100,23 @@ const EMPTY_VIEW = {
   projects: [],
 }
 
+/** Detail payload a fake service answers for one card. */
+const TASK_DETAIL = {
+  card: {
+    id: 't1',
+    projectId: 'p1',
+    projectName: 'Project One',
+    title: 'First',
+    url: 'https://www.teambition.com/project/p1/tasks/t1',
+  },
+  note: '',
+  involverNames: [],
+  customFields: [],
+  subtasks: [],
+  activities: [],
+  fetchedAt: 1,
+}
+
 /** Envelope narrowing for assertions. */
 function envelope(body: unknown): { ok: boolean; value?: unknown; error?: { code: string; message: string } } {
   if (typeof body !== 'object' || body === null) throw new Error('response body is not an object')
@@ -268,6 +285,41 @@ describe('dispatch', () => {
     })
     expect(envelope(response.body)).toMatchObject({ ok: true, value: { taskId: 't-new' } })
     expect(requests).toEqual([{ projectId: 'p1', title: 'New', statusId: 'st1', scenarioConfigId: 'sc1' }])
+  })
+
+  it('forwards the task detail request', async () => {
+    const requests: unknown[] = []
+    const test = harness({
+      taskDetail: async (request: unknown) => {
+        requests.push(request)
+        return TASK_DETAIL
+      },
+    } as unknown as TeambitionService)
+    const response = await call(test.route.handler, {
+      path: '/teambition/task/detail',
+      body: '{"projectId":"p1","taskId":"t1"}',
+    })
+    expect(response.status).toBe(200)
+    expect(envelope(response.body)).toEqual({ ok: true, value: TASK_DETAIL })
+    expect(requests).toEqual([{ projectId: 'p1', taskId: 't1' }])
+  })
+
+  it('rejects a task detail request without a taskId', async () => {
+    const test = harness({
+      taskDetail: async () => { throw new Error('the service must not be called') },
+    } as unknown as TeambitionService)
+    const response = await call(test.route.handler, { path: '/teambition/task/detail', body: '{"projectId":"p1"}' })
+    expect(response.status).toBe(200)
+    expect(envelope(response.body)).toMatchObject({ ok: false, error: { code: 'invalid-request', message: 'taskId must be a non-empty string' } })
+  })
+
+  it('rejects a non-string projectId in the task detail request', async () => {
+    const test = harness({
+      taskDetail: async () => { throw new Error('the service must not be called') },
+    } as unknown as TeambitionService)
+    const response = await call(test.route.handler, { path: '/teambition/task/detail', body: '{"projectId":42,"taskId":"t1"}' })
+    expect(response.status).toBe(200)
+    expect(envelope(response.body)).toMatchObject({ ok: false, error: { code: 'invalid-request', message: 'projectId must be a non-empty string' } })
   })
 
   it('rejects a non-object body with invalid-request', async () => {

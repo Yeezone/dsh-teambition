@@ -28,12 +28,14 @@ import {
   type TeambitionStateView,
   type TeambitionStatusView,
   type TeambitionStageView,
+  type TeambitionTaskDetailView,
   type TeambitionViewView,
   type TeambitionWorkspaceChoice,
 } from '../core/protocol.ts'
 import { TeambitionApi, type TeambitionApiFace } from './api.ts'
 import type { SessionsFace, UiWorkspaceFace, WorkspaceItemView, WorkspacesFace } from './faces.ts'
 import { t, type TeambitionKey } from './locales.ts'
+import { TaskDetailPanel, type TaskDetailPhase } from './TaskDetail.tsx'
 import css from './panel.module.css'
 
 /** Route client used when the page is mounted without one. */
@@ -478,6 +480,20 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const [noticeError, setNoticeError] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  // Task detail page of the open card: the payload, its load phase and the retry
+  // counter. The page renders from the card at once and fills the extra blocks
+  // (note, subtasks, activity feed) once the host answers.
+  const [taskDetail, setTaskDetail] = useState<TeambitionTaskDetailView>()
+  const [taskDetailPhase, setTaskDetailPhase] = useState<TaskDetailPhase>('loading')
+  const [taskDetailError, setTaskDetailError] = useState<string>()
+  const [taskDetailAttempt, setTaskDetailAttempt] = useState(0)
+
+  /** Card of the open task page; undefined leaves the page closed. */
+  const openCard = activeCardId === undefined ? undefined : (detail?.cards ?? []).find(card => card.id === activeCardId)
+
+  /** Read sequence guard of the task detail payload. */
+  const taskDetailSeq = useRef(0)
+
   // Remember the task-module controls between visits; the settings surface is
   // never stored as the default view.
   useEffect(() => {
@@ -607,6 +623,34 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
 
   // The create form's column picker only offers the selected view's columns.
   useEffect(() => { setDraftColumnId('') }, [projectId, tasklistId, viewId])
+
+  // Load the full task page of the open card. The page is a read-only view built
+  // from one route: it starts as a skeleton off the list card and fills in when
+  // the host answers, so opening never blocks the board.
+  useEffect(() => {
+    if (openCard === undefined) {
+      taskDetailSeq.current += 1
+      setTaskDetail(undefined)
+      setTaskDetailPhase('loading')
+      setTaskDetailError(undefined)
+      return
+    }
+    const seq = ++taskDetailSeq.current
+    setTaskDetail(undefined)
+    setTaskDetailPhase('loading')
+    setTaskDetailError(undefined)
+    void (async () => {
+      const result = await api.fetchTaskDetail(openCard.projectId, openCard.id)
+      if (seq !== taskDetailSeq.current) return
+      if (!result.ok) {
+        setTaskDetailPhase('failed')
+        setTaskDetailError(t('error.generic', { message: result.error.message }))
+        return
+      }
+      setTaskDetail(result.value)
+      setTaskDetailPhase('ready')
+    })()
+  }, [openCard?.id, openCard?.projectId, api, taskDetailAttempt])
 
   const setCardError = useCallback((cardId: string, message: string | undefined): void => {
     setCardErrors(previous => {
@@ -889,6 +933,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   )
 
   let body: ReactElement
+  /** Task detail page of the open card, rendered over the body. */
+  let overlay: ReactElement | null = null
   if (statePhase === 'loading' && state === undefined) {
     body = <div className={css.stateBox}><span data-dsh-part="loading">{t('panel.loading')}</span></div>
   } else if (statePhase === 'failed' && state === undefined) {
@@ -1056,6 +1102,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
                 onRun: () => { void runCard(card) },
                 onStatus: statusId => { void changeStatus(card.id, statusId) },
                 onBind: workspaceId => { void bindCard(card, workspaceId) },
+                onOpen: () => { setActiveCardId(card.id) },
               }))}
         </div>
       </section>
@@ -1355,80 +1402,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       )
     }
 
-    const activeCard = activeCardId === undefined ? undefined : cards.find(card => card.id === activeCardId)
-
-    /** Detail drawer of the selected task. */
-    const renderTaskDetail = (card: TeambitionCardView): ReactElement => {
-      const choice = cardChoice(card, state.settings)
-      const boundWorkspace = choice === undefined ? undefined : roster.find(item => item.workspaceId === choice.workspaceId)
-      const chipText = choice === undefined
-        ? t('board.unboundWorkspace')
-        : (boundWorkspace === undefined ? choice.workspaceId : workspaceTitle(boundWorkspace))
-      const running = runningCardId === card.id
-      const busy = runningCardId !== undefined || pendingCardId !== undefined || pendingCardId === card.id
-      const error = cardErrors[card.id]
-      const row = (label: string, value: ReactElement | string): ReactElement => (
-        <div className={css.drawerRow} key={label}>
-          <span className={css.drawerLabel}>{label}</span>
-          <span className={css.drawerValue}>{value}</span>
-        </div>
-      )
-      const priority = priorityLabel(card.priority)
-      // Workflow projects bind every card to one task type; show it only when the
-      // project actually carries the scenario list.
-      const scenario = card.scenarioConfigId === undefined
-        ? undefined
-        : detail.scenarioConfigs.find(candidate => candidate.id === card.scenarioConfigId)
-      return (
-        <aside className={css.drawer} data-dsh-part="task-detail" data-card-id={card.id} aria-label={t('detail.title')}>
-          <header className={css.drawerHead}>
-            <h3 className={css.drawerTitle}>
-              {card.isDone === true ? <span className={css.doneMark} data-dsh-part="drawer-done" role="img" aria-label={t('tasks.done')}>✓</span> : null}
-              {card.title}
-            </h3>
-            <button type="button" className={css.button} onClick={() => { setActiveCardId(undefined) }}>{t('detail.close')}</button>
-          </header>
-          <div className={css.drawerFacts}>
-            {row(t('tasks.state'), card.isDone === true ? t('tasks.done') : t('tasks.notDone'))}
-            {card.uniqueId === undefined ? null : row(t('detail.taskId'), `#${String(card.uniqueId)}`)}
-            {priority === undefined ? null : row(t('toolbar.sortPriority'), priority)}
-            {row(t('detail.executor'), renderExecutor(card, true))}
-            {row(t('detail.due'), renderDue(card))}
-            {row(statusView ? t('board.status') : t('detail.stage'), stageNameOf(card) ?? '-')}
-            {scenario === undefined ? null : row(t('board.scenario'), scenario.name)}
-            {row(t('detail.tasklist'), tasklistNameOf(card) ?? '-')}
-            {row(t('detail.created'), formatTime(card.createdAt))}
-            {row(t('detail.updated'), formatTime(card.updatedAt))}
-          </div>
-          <section className={css.drawerSection}>
-            <h4 className={css.drawerSectionTitle}>{t('detail.note')}</h4>
-            <p className={css.drawerNote}>{card.note === undefined || card.note.trim() === '' ? t('detail.noNote') : card.note}</p>
-          </section>
-          {error === undefined ? null : <p className={css.cardError} role="alert">{error}</p>}
-          <div className={css.drawerActions}>
-            <button type="button" className={`${css.button} ${css.primary}`} disabled={busy} onClick={() => { void runCard(card) }}>
-              {running ? <><span className={css.spinner} aria-hidden="true" /> {t('card.running')}</> : t('card.run')}
-            </button>
-            <a className={css.link} href={card.url} target="_blank" rel="noreferrer">{t('card.openExternal')}</a>
-          </div>
-          <label className={css.field}>
-            <span className={css.fieldLabel}>{t('card.bindingLabel')}</span>
-            <select
-              className={css.tableSelect}
-              value={choice === undefined ? '' : choice.workspaceId}
-              disabled={busy}
-              title={chipText}
-              onChange={event => { void bindCard(card, event.target.value) }}
-            >
-              <option value="">{t('settings.workspaceUnbound')}</option>
-              {roster.map(item => <option key={item.workspaceId} value={item.workspaceId}>{workspaceTitle(item)}</option>)}
-            </select>
-          </label>
-        </aside>
-      )
-    }
-
-    /** The Teambition task module: toolbar, task table and the detail drawer. */
+    /** The Teambition task module: toolbar, task table and the create form. */
     const renderTasks = (): ReactElement => (
       <div className={css.taskView} data-dsh-part="task-view">
         <div className={css.taskMain}>
@@ -1518,7 +1492,6 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         )}
         {createForm}
         </div>
-        {activeCard === undefined ? null : renderTaskDetail(activeCard)}
       </div>
     )
 
@@ -1566,6 +1539,56 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     )
 
     body = view === 'tasks' ? renderTasks() : boardBody
+
+    // The task page opens from a board card or a table row and renders over
+    // whichever surface is active; its actions reuse the card's own callbacks.
+    if (openCard !== undefined) {
+      const statusName = openCard.statusId === undefined
+        ? undefined
+        : detail.statuses.find(status => status.id === openCard.statusId)?.name
+      const currentIndex = openCard.statusId === undefined
+        ? -1
+        : detail.statuses.findIndex(status => status.id === openCard.statusId)
+      const nextOpen = detail.statuses.slice(currentIndex + 1).find(status => status.kind !== 'end')
+      const endStatus = detail.statuses.find(status => status.kind === 'end')
+      const completeStatusId = endStatus !== undefined && openCard.statusId !== endStatus.id && openCard.isDone !== true
+        ? endStatus.id
+        : undefined
+      const scenarioName = openCard.scenarioConfigId === undefined
+        ? undefined
+        : detail.scenarioConfigs.find(scenario => scenario.id === openCard.scenarioConfigId)?.name
+      const openColumnId = columnIdOf(openCard, columns)
+      const columnKind = openColumnId === undefined
+        ? undefined
+        : columns.find(candidate => candidate.id === openColumnId)?.kind
+      overlay = (
+        <TaskDetailPanel
+          card={openCard}
+          detail={taskDetail}
+          phase={taskDetailPhase}
+          error={taskDetailError}
+          columnName={stageNameOf(openCard)}
+          columnKind={columnKind}
+          tasklistName={tasklistNameOf(openCard)}
+          statusName={statusName}
+          scenarioName={scenarioName}
+          settings={state.settings}
+          roster={roster}
+          choice={cardChoice(openCard, state.settings)}
+          running={runningCardId === openCard.id}
+          pending={pendingCardId === openCard.id}
+          busy={runningCardId !== undefined || pendingCardId !== undefined}
+          cardError={cardErrors[openCard.id]}
+          nextStatus={nextOpen === undefined ? undefined : { id: nextOpen.id, name: nextOpen.name }}
+          completeStatusId={completeStatusId}
+          onRun={() => { void runCard(openCard) }}
+          onStatus={statusId => { void changeStatus(openCard.id, statusId) }}
+          onBind={workspaceId => { void bindCard(openCard, workspaceId) }}
+          onClose={() => { setActiveCardId(undefined) }}
+          onRetry={() => { setTaskDetailAttempt(count => count + 1) }}
+        />
+      )
+    }
   }
 
   return (
@@ -1573,6 +1596,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       {header}
       {noticeLine}
       <div className={css.body} data-dsh-part="body">{body}</div>
+      {overlay}
     </div>
   )
 }
@@ -1597,6 +1621,8 @@ interface CardProps {
   readonly onRun: () => void
   readonly onStatus: (statusId: string) => void
   readonly onBind: (workspaceId: string) => void
+  /** Open the task detail page of this card. */
+  readonly onOpen: () => void
 }
 
 /**
@@ -1635,6 +1661,13 @@ function renderCard(props: CardProps): ReactElement {
       data-workspace-bound={choice === undefined ? 'false' : 'true'}
       draggable={!busy}
       title={busy ? undefined : t('board.dragHint')}
+      onClick={event => {
+        // Clicks on the card's own controls (run, advance, binding select, the
+        // external link) are actions, not "open the task page".
+        const target = event.target as HTMLElement
+        if (target.closest('button, a, select, option, input, textarea, label') !== null) return
+        props.onOpen()
+      }}
       onDragStart={event => {
         // The data transfer carries the id so a drop target does not have to
         // track render state, and it makes the drag a real move for the browser.
