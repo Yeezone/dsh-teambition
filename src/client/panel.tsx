@@ -141,18 +141,24 @@ interface TaskGroup {
 }
 
 /** Remembered task-module controls, so a reload keeps the working set. */
-export const TASK_VIEW_STORAGE_KEY = 'dsh.teambition.taskview.v1'
+export const TASK_VIEW_STORAGE_KEY = 'dsh.teambition.taskview.v2'
+
+/** The two working surfaces of the panel; the setting view is not remembered. */
+type TaskView = 'tasks' | 'board'
 
 /** Task-module controls persisted between visits. */
 interface TaskViewSettings {
+  readonly view: TaskView
   readonly groupBy: TaskGrouping
   readonly filterBy: TaskFilter
   readonly sortBy: TaskSort
+  /** Task list the table is narrowed to; empty means every list. */
+  readonly tasklistFilter: string
 }
 
 /** Read the remembered task-module controls. */
 function readTaskView(): TaskViewSettings {
-  const fallback: TaskViewSettings = { groupBy: 'none', filterBy: 'all', sortBy: 'updated' }
+  const fallback: TaskViewSettings = { view: 'tasks', groupBy: 'none', filterBy: 'all', sortBy: 'updated', tasklistFilter: '' }
   try {
     if (typeof localStorage === 'undefined') return fallback
     const raw = localStorage.getItem(TASK_VIEW_STORAGE_KEY)
@@ -160,10 +166,12 @@ function readTaskView(): TaskViewSettings {
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return fallback
     const record = parsed as Record<string, unknown>
+    const view: TaskView = record.view === 'board' ? 'board' : 'tasks'
     const groupBy = record.groupBy === 'tasklist' || record.groupBy === 'stage' || record.groupBy === 'executor' ? record.groupBy : 'none'
     const filterBy = record.filterBy === 'open' || record.filterBy === 'done' || record.filterBy === 'overdue' || record.filterBy === 'unassigned' ? record.filterBy : 'all'
     const sortBy = record.sortBy === 'created' || record.sortBy === 'due' || record.sortBy === 'priority' ? record.sortBy : 'updated'
-    return { groupBy, filterBy, sortBy }
+    const tasklistFilter = typeof record.tasklistFilter === 'string' ? record.tasklistFilter : ''
+    return { view, groupBy, filterBy, sortBy, tasklistFilter }
   } catch {
     return fallback
   }
@@ -290,16 +298,6 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const api = props.api ?? DEFAULT_API
   const { sessions, workspaces: workspaceService, uiWorkspace } = props
 
-  const [view, setView] = useState<PanelView>('tasks')
-  // The surface the settings button returns to; the task module is the entry.
-  const [returnView, setReturnView] = useState<'tasks' | 'board'>('tasks')
-  const [state, setState] = useState<TeambitionStateView>()
-  const [statePhase, setStatePhase] = useState<Phase>('loading')
-  const [stateError, setStateError] = useState<string>()
-  const [notice, setNotice] = useState<string>()
-  const [noticeError, setNoticeError] = useState(false)
-  const [busy, setBusy] = useState(false)
-
   // The last visited project and task list come from storage, so a reload opens
   // the board the user worked in instead of the first joined project.
   const [initialSelection] = useState<TeambitionSelection>(readSelection)
@@ -321,17 +319,35 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string>()
 
-  // Task-module controls: search, grouping, filter and order.
+  // Task-module controls: surface, search, grouping, filter and order.
   const [initialTaskView] = useState<TaskViewSettings>(readTaskView)
+  // The remembered surface is the default view: opening the panel, or picking
+  // another project, lands on it instead of always resetting to the task table.
+  const [view, setView] = useState<PanelView>(initialTaskView.view)
+  // The surface the settings button returns to.
+  const [returnView, setReturnView] = useState<TaskView>(initialTaskView.view)
   const [query, setQuery] = useState('')
   const [groupBy, setGroupBy] = useState<TaskGrouping>(initialTaskView.groupBy)
   const [filterBy, setFilterBy] = useState<TaskFilter>(initialTaskView.filterBy)
   const [sortBy, setSortBy] = useState<TaskSort>(initialTaskView.sortBy)
+  /** Task list the table is narrowed to; empty means every list of the project. */
+  const [tasklistFilter, setTasklistFilter] = useState<string>(initialTaskView.tasklistFilter)
   /** Card whose detail drawer is open; undefined closes it. */
   const [activeCardId, setActiveCardId] = useState<string>()
 
-  // Remember the task-module controls between visits.
-  useEffect(() => { writeTaskView({ groupBy, filterBy, sortBy }) }, [groupBy, filterBy, sortBy])
+  const [state, setState] = useState<TeambitionStateView>()
+  const [statePhase, setStatePhase] = useState<Phase>('loading')
+  const [stateError, setStateError] = useState<string>()
+  const [notice, setNotice] = useState<string>()
+  const [noticeError, setNoticeError] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  // Remember the task-module controls between visits; the settings surface is
+  // never stored as the default view.
+  useEffect(() => {
+    const remembered: TaskView = view === 'settings' ? returnView : view
+    writeTaskView({ view: remembered, groupBy, filterBy, sortBy, tasklistFilter })
+  }, [view, returnView, groupBy, filterBy, sortBy, tasklistFilter])
 
   /** Read sequence guard: a stale project read must not overwrite a newer one. */
   const projectSeq = useRef(0)
@@ -410,6 +426,23 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     if (tasklists.some(list => list.id === tasklistId)) return
     setTasklistId(undefined)
   }, [detail, tasklistId])
+
+  // The toolbar task-list filter belongs to one project: switching projects
+  // clears it (but a reload keeps the remembered one).
+  const lastProject = useRef<string | undefined>(initialSelection.projectId)
+  useEffect(() => {
+    if (lastProject.current === projectId) return
+    lastProject.current = projectId
+    setTasklistFilter('')
+  }, [projectId])
+
+  // Same for a remembered filter whose task list the project no longer has.
+  useEffect(() => {
+    if (tasklistFilter === '' || detail === undefined) return
+    const tasklists = detail.tasklists ?? []
+    if (tasklists.some(list => list.id === tasklistFilter)) return
+    setTasklistFilter('')
+  }, [detail, tasklistFilter])
 
   // The create form's column picker only offers the selected task list's columns.
   useEffect(() => { setDraftStageId('') }, [projectId, tasklistId])
@@ -685,6 +718,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       projects={state.projects}
       roster={roster}
       api={api}
+      defaultView={view === 'settings' ? returnView : view}
+      onDefaultView={(next) => { setReturnView(next); setView(next) }}
       onSaved={async () => { await loadState() }}
       notify={flash}
     />
@@ -876,6 +911,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
 
     const normalizedQuery = query.trim().toLowerCase()
     const visibleCards = cards.filter(card => {
+      // Toolbar task-list filter: narrow the table to one list of the project.
+      if (tasklistFilter !== '' && listIdOfCard(card) !== tasklistFilter) return false
       if (normalizedQuery !== '') {
         const haystack = [
           card.title,
@@ -1106,6 +1143,20 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
               <option value="unassigned">{t('toolbar.filterUnassigned')}</option>
             </select>
           </label>
+          {tasklists.length > 1 ? (
+            <label className={css.toolbarField} data-dsh-part="tasklist-filter">
+              <span>{t('toolbar.tasklist')}</span>
+              <select
+                className={css.select}
+                value={tasklistFilter}
+                aria-label={t('toolbar.tasklist')}
+                onChange={event => { setTasklistFilter(event.target.value) }}
+              >
+                <option value="">{t('toolbar.tasklistAll')}</option>
+                {tasklists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
+              </select>
+            </label>
+          ) : null}
           <label className={css.toolbarField}>
             <span>{t('toolbar.sort')}</span>
             <select className={css.select} value={sortBy} onChange={event => { setSortBy(event.target.value as TaskSort) }}>
@@ -1332,6 +1383,9 @@ interface SettingsProps {
   readonly projects: readonly TeambitionProject[]
   readonly roster: readonly WorkspaceItemView[]
   readonly api: TeambitionApiFace
+  /** Surface the panel opens on, chosen here and remembered. */
+  readonly defaultView: TaskView
+  readonly onDefaultView: (view: TaskView) => void
   readonly onSaved: () => Promise<void>
   readonly notify: (message: string, isError?: boolean) => void
 }
@@ -1556,6 +1610,20 @@ function TeambitionSettings(props: SettingsProps): ReactElement {
           <option value="web">{t('settings.apiBaseWeb')}</option>
         </select>
         <p className={css.hint}>{t('settings.apiBaseHint')}</p>
+      </section>
+
+      <section className={css.settingsBlock} data-dsh-part="default-view">
+        <h3 className={css.settingsTitle}>{t('settings.defaultView')}</h3>
+        <select
+          className={css.select}
+          value={props.defaultView}
+          aria-label={t('settings.defaultView')}
+          onChange={event => { props.onDefaultView(event.target.value === 'board' ? 'board' : 'tasks') }}
+        >
+          <option value="tasks">{t('settings.defaultViewTasks')}</option>
+          <option value="board">{t('settings.defaultViewBoard')}</option>
+        </select>
+        <p className={css.hint}>{t('settings.defaultViewHint')}</p>
       </section>
 
       <section className={css.settingsBlock} data-dsh-part="default-workspace">

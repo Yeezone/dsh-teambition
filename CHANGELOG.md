@@ -4,6 +4,24 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-21
+
+### Added
+
+- Task-list filter in the task toolbar: with several lists, the table can be
+  narrowed to one list without leaving the "all task lists" board; the filter is
+  remembered per visit and cleared when the project changes.
+- Default-view setting in the settings view (task list / board). The chosen
+  surface is remembered and is what the panel and every project switch open on,
+  so the table is no longer forced on people who work in the board.
+- Three task module tests: the task-list filter, the remembered board view and
+  the default-view setting.
+
+### Changed
+
+- The remembered task-view storage moved to `dsh.teambition.taskview.v2` (it now
+  carries the view and the task-list filter); v1 entries are ignored and rebuilt.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

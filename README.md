@@ -34,7 +34,8 @@ default, then the panel-wide default workspace.
   "Plugins" and "Automations".
 - **Main page**: registered on the official `main` seat, with a Tasks / Board
   switcher plus project / task list selectors, refresh and settings.
-- **Task list (default view)**: a table close to the Teambition task module —
+- **Task list (default unless the default view is the board)**: a table close to
+  the Teambition task module —
   task number, title, assignee avatar and name, due date (red when overdue), stage
   and last update. The toolbar searches, groups by task list / stage / assignee,
   filters by open / done / overdue / unassigned state, and sorts by updated,
@@ -47,13 +48,18 @@ default, then the panel-wide default workspace.
 - **New card form** at the bottom of the panel: title, optional note, target
   stage.
 - **Settings view**: cookie (write / clear), diagnose probes, operator id,
-  endpoint base, default workspace, and a per-project workspace table.
+  endpoint base, default view (task list / board), default workspace, and a
+  per-project workspace table.
 
 ## Features
 
 - Task module: a task table (number, title, assignee, due, stage, update time)
   with search / grouping / filtering / sorting and a slide-over detail drawer; the
   chosen view and toolbar settings persist in `localStorage`.
+- Task-list filter: when a project has several lists, the toolbar narrows the
+  table to one of them; switching project clears it back to every list.
+- Default view: the settings view picks task list or board, and the panel plus
+  every project switch open on it.
 - Two-level switching (project, then task list). Projects with many task lists
   are grouped by list instead of flattened into dozens of same-named columns; the
   selection is remembered in `localStorage` and restored on the next visit.
