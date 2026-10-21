@@ -4,6 +4,14 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-21
+
+### Changed
+
+- Both READMEs now name the latest release (`v0.1`, `0.1.0`) instead of a fixed
+  version number, so the introduction stays correct while `main` carries `0.1.x`
+  increments. `README.i18n.yaml` re-recorded.
+
 ## [0.1.1] - 2026-10-21
 
 ### Changed

@@ -9,7 +9,7 @@ and submits the card's title, project, link, updated time and note as the openin
 prompt.
 
 - Repository: <https://github.com/Yeezone/dsh-teambition>
-- Version: `0.1.0` (release line `v0.1`)
+- Latest release: `v0.1` (`0.1.0`); `main` carries the `0.1.x` increments
 - License: Apache-2.0
 
 ## Why it exists
