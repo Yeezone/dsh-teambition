@@ -542,3 +542,405 @@
 .boardNested .column {
   max-height: 420px;
 }
+
+/* ------------------------------------------------------- view switcher */
+
+.viewSwitch {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+}
+
+.viewTab {
+  padding: 2px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.viewTab:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.viewTabActive {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, 0.2));
+  font-weight: 600;
+}
+
+.viewTab:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------- task module: list */
+
+.taskView {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 16px 12px;
+  overflow: hidden;
+}
+
+.taskMain {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.toolbarField {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.searchInput {
+  box-sizing: border-box;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  color: inherit;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+  background: transparent;
+}
+
+.searchInput:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color);
+  outline-offset: 1px;
+}
+
+.toolbarCount {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.taskTable {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 640px;
+  overflow-x: auto;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+.taskRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 128px 96px 112px 104px auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.16));
+  cursor: pointer;
+}
+
+.taskRow:last-child,
+.taskGroup:last-child .taskRow:last-child {
+  border-bottom: none;
+}
+
+.taskRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.08));
+}
+
+.taskRow:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color);
+  outline-offset: -2px;
+}
+
+.taskRowActive {
+  background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, 0.16));
+}
+
+.taskHeadRow {
+  cursor: default;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2, transparent);
+}
+
+.taskHeadRow:hover {
+  background: var(--dsw-alias-bg-layer-2, transparent);
+}
+
+.taskCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.colTask {
+  /* One-line rows, like the Teambition task module: the title ellipsizes
+     instead of wrapping, which keeps every row the same height. */
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.colTask .taskTitle {
+  flex: 1 1 auto;
+}
+
+.colExecutor,
+.colStage,
+.colUpdated {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.colUpdated {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.taskNumber {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.taskTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskTitleDone {
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: line-through;
+}
+
+.priorityFlag {
+  flex: 0 0 auto;
+  max-width: 92px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-warning);
+  border: 1px solid currentColor;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metaCount {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.doneBadge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--dsw-alias-label-success);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.executor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.executorName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.avatar,
+.avatarFallback {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatarFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, 0.2));
+}
+
+.due {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dueOverdue {
+  color: var(--dsw-alias-label-danger);
+}
+
+.dueFlag {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.taskGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupHead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2, transparent);
+  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.16));
+}
+
+/* ------------------------------------------------ task module: drawer */
+
+/* Slide-over detail panel: it floats over the table instead of shrinking it,
+   the way the Teambition task module opens a card without losing the list. */
+.drawer {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 360px;
+  max-width: calc(100% - 32px);
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.28));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, Canvas));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  z-index: 5;
+}
+
+.drawerHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.drawerTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.drawerFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawerRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.drawerLabel {
+  flex: 0 0 auto;
+  width: 72px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.drawerValue {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.drawerSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawerSectionTitle {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.drawerNote {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.drawerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

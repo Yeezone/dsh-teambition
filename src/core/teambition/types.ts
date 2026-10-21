@@ -124,6 +124,24 @@ export interface TeambitionTask {
   readonly priority?: number
   /** Parent task id when the remote task is a subtask. */
   readonly parentTaskId?: string
+  /** Human task number Teambition shows next to the title (`uniqueId`). */
+  readonly uniqueId?: number
+  /** Executor user id (`_executorId`, or the inlined `executor._id`). */
+  readonly executorId?: string
+  /** Executor display name, when the API inlined the member object. */
+  readonly executorName?: string
+  /** Executor avatar URL, when the API inlined the member object. */
+  readonly executorAvatarUrl?: string
+  /** Due date as returned (`dueDate`, ISO string), kept verbatim. */
+  readonly dueAtRaw?: string
+  /** Due date instant in ms, when parseable. */
+  readonly dueAt?: number
+  /** `created` instant in ms, when parseable. */
+  readonly createdAt?: number
+  /** Subtask count (`subtaskCount`), when the API reports it. */
+  readonly subtaskCount?: number
+  /** Comment count (`commentsCount`), when the API reports it. */
+  readonly commentsCount?: number
 }
 
 /** One normalized remote project. */

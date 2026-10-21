@@ -32,8 +32,15 @@ default, then the panel-wide default workspace.
 
 - **Sidebar row**: registered on the official `sidebar.panellist` seat, after
   "Plugins" and "Automations".
-- **Main page**: registered on the official `main` seat, with project / task list
-  switchers plus refresh and settings.
+- **Main page**: registered on the official `main` seat, with a Tasks / Board
+  switcher plus project / task list selectors, refresh and settings.
+- **Task list (default view)**: a table close to the Teambition task module —
+  task number, title, assignee avatar and name, due date (red when overdue), stage
+  and last update. The toolbar searches, groups by task list / stage / assignee,
+  filters by open / done / overdue / unassigned state, and sorts by updated,
+  created, due or priority. Clicking a row slides a detail drawer in from the
+  right (number, priority, assignee, due, stage, task list, created / updated,
+  note body) which can also run the card, rebind its workspace and move its stage.
 - **Board**: one column group per stage, cards carrying a status badge, their
   workspace marker, and the actions Run, Open in Teambition, Bind workspace,
   Move to stage.
@@ -44,9 +51,14 @@ default, then the panel-wide default workspace.
 
 ## Features
 
+- Task module: a task table (number, title, assignee, due, stage, update time)
+  with search / grouping / filtering / sorting and a slide-over detail drawer; the
+  chosen view and toolbar settings persist in `localStorage`.
 - Two-level switching (project, then task list). Projects with many task lists
   are grouped by list instead of flattened into dozens of same-named columns; the
   selection is remembered in `localStorage` and restored on the next visit.
+- The board view stays available through the Board tab, with the same card
+  creation and stage moving as before.
 - Card actions: run in DSH, move to another stage, move to another workflow
   status (when the project exposes that endpoint), open in Teambition.
 - Workspace bindings with card > project > panel-default precedence, resolved by

@@ -187,6 +187,14 @@ export function readRemoteTask(raw: unknown, fallbackProjectId?: string): Teambi
   const statusId = str(record.tfsId) ?? str(record.taskflowstatusId) ?? str(record.statusId) ?? str(record._taskflowstatusId)
   const priority = num(record.priority)
   const parentTaskId = str(record.parentTaskId)
+  const uniqueId = num(record.uniqueId)
+  const executor = readInlineMember(record.executor)
+  const executorId = executor?.id ?? str(record.executorId) ?? str(record._executorId)
+  const dueAtRaw = str(record.dueDate) ?? str(record.dueAt)
+  const dueAt = parseInstant(dueAtRaw)
+  const createdAt = parseInstant(str(record.created) ?? str(record.createdAt))
+  const subtaskCount = num(record.subtaskCount)
+  const commentsCount = num(record.commentsCount)
   return {
     id,
     projectId,
@@ -201,6 +209,41 @@ export function readRemoteTask(raw: unknown, fallbackProjectId?: string): Teambi
     ...(record.isArchived === true ? { isArchived: true } : {}),
     ...(priority === undefined ? {} : { priority }),
     ...(parentTaskId === undefined ? {} : { parentTaskId }),
+    ...(uniqueId === undefined ? {} : { uniqueId }),
+    ...(executorId === undefined ? {} : { executorId }),
+    ...(executor?.name === undefined ? {} : { executorName: executor.name }),
+    ...(executor?.avatarUrl === undefined ? {} : { executorAvatarUrl: executor.avatarUrl }),
+    ...(dueAtRaw === undefined ? {} : { dueAtRaw }),
+    ...(dueAt === undefined ? {} : { dueAt }),
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(subtaskCount === undefined ? {} : { subtaskCount }),
+    ...(commentsCount === undefined ? {} : { commentsCount }),
+  }
+}
+
+/** Fields of the member object Teambition inlines on a task (`executor`). */
+interface InlineMember {
+  readonly id?: string
+  readonly name?: string
+  readonly avatarUrl?: string
+}
+
+/**
+ * Read the tiny member shape Teambition inlines on tasks and task lists.
+ * @param raw - `executor` / `creator` value from the API.
+ * @returns the member fields that are present, or undefined when not an object.
+ */
+function readInlineMember(raw: unknown): InlineMember | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const record = raw as Record<string, unknown>
+  const id = str(record.id) ?? str(record._id) ?? str(record.userId) ?? str(record._userId)
+  const name = collapseWhitespace(str(record.name) ?? str(record.title) ?? '')
+  const avatarUrl = str(record.avatarUrl) ?? str(record.avatar)
+  if (id === undefined && name === '' && avatarUrl === undefined) return undefined
+  return {
+    ...(id === undefined ? {} : { id }),
+    ...(name === '' ? {} : { name }),
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
   }
 }
 

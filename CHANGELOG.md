@@ -4,6 +4,33 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-21
+
+### Added
+
+- Task module view, now the default view of the panel: a task table with the task
+  number, title, assignee avatar and name, due date (flagged when overdue), stage
+  and last update time.
+- Toolbar with search (title / note / number / assignee), grouping by task list,
+  stage or assignee, filtering by all / open / done / overdue / unassigned, and
+  sorting by updated, created, due or priority; the toolbar state persists in
+  `localStorage`.
+- Slide-over detail drawer for a task: number, priority, assignee, due date,
+  stage, task list, created and updated times, note body, plus the existing
+  run / open-in-Teambition / bind-workspace / move-stage actions.
+- Host and protocol now carry `uniqueId`, executor (id, name, avatar url), due
+  date, created time, subtask count and comment count for every card.
+- Eight task module tests covering the default table and count, search, the four
+  filters, grouping by stage and assignee, sorting by due date, opening and
+  running a card from the drawer, and restoring the persisted toolbar settings.
+
+### Changed
+
+- The panel opens on the task list; the previous card board stays available
+  through the Tasks / Board switcher.
+- Table rows stay on one line, and the detail drawer floats over the list instead
+  of shrinking it.
+
 ## [0.1.2] - 2026-10-21
 
 ### Changed

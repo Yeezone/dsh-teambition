@@ -122,7 +122,62 @@ export interface TeambitionPanelProps {
 }
 
 /** Which surface the body shows. */
-type PanelView = 'board' | 'settings'
+type PanelView = 'tasks' | 'board' | 'settings'
+
+/** How the task module groups its rows. */
+type TaskGrouping = 'none' | 'tasklist' | 'stage' | 'executor'
+
+/** Which rows the task module keeps. */
+type TaskFilter = 'all' | 'open' | 'done' | 'overdue' | 'unassigned'
+
+/** Row order of the task module. */
+type TaskSort = 'updated' | 'created' | 'due' | 'priority'
+
+/** One rendered group of task rows. */
+interface TaskGroup {
+  readonly key: string
+  readonly label: string
+  readonly cards: readonly TeambitionCardView[]
+}
+
+/** Remembered task-module controls, so a reload keeps the working set. */
+export const TASK_VIEW_STORAGE_KEY = 'dsh.teambition.taskview.v1'
+
+/** Task-module controls persisted between visits. */
+interface TaskViewSettings {
+  readonly groupBy: TaskGrouping
+  readonly filterBy: TaskFilter
+  readonly sortBy: TaskSort
+}
+
+/** Read the remembered task-module controls. */
+function readTaskView(): TaskViewSettings {
+  const fallback: TaskViewSettings = { groupBy: 'none', filterBy: 'all', sortBy: 'updated' }
+  try {
+    if (typeof localStorage === 'undefined') return fallback
+    const raw = localStorage.getItem(TASK_VIEW_STORAGE_KEY)
+    if (raw === null) return fallback
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return fallback
+    const record = parsed as Record<string, unknown>
+    const groupBy = record.groupBy === 'tasklist' || record.groupBy === 'stage' || record.groupBy === 'executor' ? record.groupBy : 'none'
+    const filterBy = record.filterBy === 'open' || record.filterBy === 'done' || record.filterBy === 'overdue' || record.filterBy === 'unassigned' ? record.filterBy : 'all'
+    const sortBy = record.sortBy === 'created' || record.sortBy === 'due' || record.sortBy === 'priority' ? record.sortBy : 'updated'
+    return { groupBy, filterBy, sortBy }
+  } catch {
+    return fallback
+  }
+}
+
+/** Remember the task-module controls for the next visit. */
+function writeTaskView(settings: TaskViewSettings): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(TASK_VIEW_STORAGE_KEY, JSON.stringify(settings))
+  } catch {
+    // Storage disabled: keep the in-memory controls, never fail the panel.
+  }
+}
 
 /** Load phase of one remote read. */
 type Phase = 'idle' | 'loading' | 'ready' | 'failed'
@@ -174,6 +229,59 @@ function formatTime(value: number | undefined): string {
 }
 
 /**
+ * Label of a Teambition priority value.
+ *
+ * `-10` is the value Teambition reports for its default "普通" priority, so it
+ * renders no flag at all; higher values are the explicit levels.
+ * @param priority - raw `priority` from the API.
+ * @returns the localized label, or undefined when the priority is the default.
+ */
+function priorityLabel(priority: number | undefined): string | undefined {
+  if (priority === undefined || priority === -10) return undefined
+  if (priority === 0) return t('tasks.priorityUrgent')
+  if (priority === 1) return t('tasks.priorityVeryUrgent')
+  if (priority === 2) return t('tasks.priorityHighest')
+  return t('tasks.priorityOther', { value: String(priority) })
+}
+
+/** Rank of a priority for sorting (higher sorts first). */
+function priorityRank(priority: number | undefined): number {
+  if (priority === undefined || priority === -10) return 0
+  return priority + 1
+}
+
+/** Short localized calendar day of an instant. */
+function formatDay(value: number | undefined): string {
+  if (value === undefined) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** Compact date-time for the table cells, without the seconds. */
+function formatMoment(value: number | undefined): string {
+  if (value === undefined) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? '-'
+    : date.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Due state of one task, used for the red "overdue" styling. */
+function dueState(card: TeambitionCardView): 'none' | 'overdue' | 'soon' | 'normal' {
+  if (card.dueAt === undefined) return 'none'
+  if (card.isDone === true) return 'normal'
+  const due = new Date(card.dueAt)
+  if (Number.isNaN(due.getTime())) return 'none'
+  const now = new Date()
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const days = Math.round((dueDay - today) / 86_400_000)
+  if (days < 0) return 'overdue'
+  if (days <= 1) return 'soon'
+  return 'normal'
+}
+
+/**
  * The panel page.
  * @param props - injected service faces and the optional route client.
  * @returns the full-height Teambition page.
@@ -182,7 +290,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const api = props.api ?? DEFAULT_API
   const { sessions, workspaces: workspaceService, uiWorkspace } = props
 
-  const [view, setView] = useState<PanelView>('board')
+  const [view, setView] = useState<PanelView>('tasks')
+  // The surface the settings button returns to; the task module is the entry.
+  const [returnView, setReturnView] = useState<'tasks' | 'board'>('tasks')
   const [state, setState] = useState<TeambitionStateView>()
   const [statePhase, setStatePhase] = useState<Phase>('loading')
   const [stateError, setStateError] = useState<string>()
@@ -210,6 +320,18 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const [draftStageId, setDraftStageId] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string>()
+
+  // Task-module controls: search, grouping, filter and order.
+  const [initialTaskView] = useState<TaskViewSettings>(readTaskView)
+  const [query, setQuery] = useState('')
+  const [groupBy, setGroupBy] = useState<TaskGrouping>(initialTaskView.groupBy)
+  const [filterBy, setFilterBy] = useState<TaskFilter>(initialTaskView.filterBy)
+  const [sortBy, setSortBy] = useState<TaskSort>(initialTaskView.sortBy)
+  /** Card whose detail drawer is open; undefined closes it. */
+  const [activeCardId, setActiveCardId] = useState<string>()
+
+  // Remember the task-module controls between visits.
+  useEffect(() => { writeTaskView({ groupBy, filterBy, sortBy }) }, [groupBy, filterBy, sortBy])
 
   /** Read sequence guard: a stale project read must not overwrite a newer one. */
   const projectSeq = useRef(0)
@@ -458,7 +580,29 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         </span>
       )}
       <span className={css.spacer} />
-      {view === 'board' && projects.length > 0 ? (
+      {view === 'settings' ? null : (
+        <div className={css.viewSwitch} role="tablist" aria-label={t('header.title')} data-dsh-part="view-switch">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'tasks'}
+            className={view === 'tasks' ? `${css.viewTab} ${css.viewTabActive}` : css.viewTab}
+            onClick={() => { setReturnView('tasks'); setView('tasks') }}
+          >
+            {t('view.tasks')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'board'}
+            className={view === 'board' ? `${css.viewTab} ${css.viewTabActive}` : css.viewTab}
+            onClick={() => { setReturnView('board'); setView('board') }}
+          >
+            {t('view.board')}
+          </button>
+        </div>
+      )}
+      {view !== 'settings' && projects.length > 0 ? (
         <label className={css.projectField} data-dsh-part="project-picker">
           <span>{t('header.project')}</span>
           <select
@@ -476,7 +620,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
           </select>
         </label>
       ) : null}
-      {view === 'board' && tasklists.length > 1 ? (
+      {view !== 'settings' && tasklists.length > 1 ? (
         <label className={css.projectField} data-dsh-part="tasklist-picker">
           <span>{t('header.tasklist')}</span>
           <select
@@ -491,7 +635,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
           </select>
         </label>
       ) : null}
-      {view === 'board' && tasklists.length === 1 ? (
+      {view !== 'settings' && tasklists.length === 1 ? (
         <span className={css.projectField} data-dsh-part="tasklist" data-tasklist-id={tasklists[0].id}>
           <span>{t('header.tasklist')}</span>
           <span className={css.tasklistName}>{tasklists[0].name}</span>
@@ -501,7 +645,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         type="button"
         className={css.button}
         disabled={busy || statePhase === 'loading'}
-        onClick={() => { void (view === 'board' ? refreshAll() : loadState()) }}
+        onClick={() => { void (view === 'settings' ? loadState() : refreshAll()) }}
       >
         {busy ? t('header.refreshing') : t('header.refresh')}
       </button>
@@ -509,9 +653,12 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         type="button"
         className={css.button}
         aria-pressed={view === 'settings'}
-        onClick={() => { setView(view === 'board' ? 'settings' : 'board') }}
+        onClick={() => {
+          if (view === 'settings') setView(returnView)
+          else { setReturnView(view); setView('settings') }
+        }}
       >
-        {view === 'board' ? t('header.settings') : t('header.back')}
+        {view === 'settings' ? t('header.back') : t('header.settings')}
       </button>
     </header>
   )
@@ -634,7 +781,380 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       </div>
     )
 
-    body = (
+    const createForm = (
+      <form className={css.boxed} data-dsh-part="create" onSubmit={event => { void submitCreate(event) }}>
+        <h3 className={css.formTitle}>{t('create.title')}</h3>
+        <div className={css.formGrid}>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('create.title')}</span>
+            <input
+              className={css.input}
+              value={draftTitle}
+              disabled={creating}
+              placeholder={t('create.titlePlaceholder')}
+              onChange={event => { setDraftTitle(event.target.value) }}
+            />
+          </label>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('create.notePlaceholder')}</span>
+            <input
+              className={css.input}
+              value={draftNote}
+              disabled={creating}
+              placeholder={t('create.notePlaceholder')}
+              onChange={event => { setDraftNote(event.target.value) }}
+            />
+          </label>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('create.stage')}</span>
+            <select
+              className={css.tableSelect}
+              value={draftStageId}
+              disabled={creating}
+              onChange={event => { setDraftStageId(event.target.value) }}
+            >
+              <option value="">{t('board.unassignedColumn')}</option>
+              {grouped
+                ? tasklists.flatMap(list => {
+                    const listStages = detail.stages.filter(stage => stage.tasklistId === list.id)
+                    return listStages.length === 0
+                      ? []
+                      : [(
+                          <optgroup key={list.id} label={list.name}>
+                            {listStages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                          </optgroup>
+                        )]
+                  })
+                : detail.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+            </select>
+          </label>
+          <button type="submit" className={`${css.button} ${css.primary}`} disabled={creating}>
+            {creating ? t('create.submitting') : t('create.submit')}
+          </button>
+        </div>
+        {createError === undefined ? null : <p className={css.cardError} role="alert">{createError}</p>}
+        {activeProject === undefined ? null : <p className={css.hint}>{activeProject.name}</p>}
+      </form>
+    )
+
+    /** Name of the column a card sits in. */
+    const stageNameOf = (card: TeambitionCardView): string | undefined =>
+      card.stageId === undefined ? undefined : detail.stages.find(stage => stage.id === card.stageId)?.name
+    /** Name of the task list a card belongs to. */
+    const tasklistNameOf = (card: TeambitionCardView): string | undefined => {
+      const id = listIdOfCard(card)
+      return id === undefined ? undefined : tasklists.find(list => list.id === id)?.name
+    }
+
+    /** Executor cell: avatar plus name, or the unassigned hint. */
+    const renderExecutor = (card: TeambitionCardView, showName: boolean): ReactElement => {
+      if (card.executorName === undefined && card.executorAvatarUrl === undefined) {
+        return <span className={css.muted}>{t('tasks.unassigned')}</span>
+      }
+      const name = card.executorName ?? '-'
+      return (
+        <span className={css.executor} title={name}>
+          {card.executorAvatarUrl === undefined
+            ? <span className={css.avatarFallback} aria-hidden="true">{name.slice(0, 1)}</span>
+            : <img className={css.avatar} src={card.executorAvatarUrl} alt="" loading="lazy" />}
+          {showName ? <span className={css.executorName}>{name}</span> : null}
+        </span>
+      )
+    }
+
+    /** Due cell: calendar day, with the overdue marker when past due. */
+    const renderDue = (card: TeambitionCardView): ReactElement => {
+      const state = dueState(card)
+      if (state === 'none') return <span className={css.muted}>{t('tasks.noDue')}</span>
+      return (
+        <span className={state === 'overdue' ? `${css.due} ${css.dueOverdue}` : css.due} data-due-state={state}>
+          {formatDay(card.dueAt)}
+          {state === 'overdue' ? <span className={css.dueFlag}>{t('tasks.overdue')}</span> : null}
+        </span>
+      )
+    }
+
+    const normalizedQuery = query.trim().toLowerCase()
+    const visibleCards = cards.filter(card => {
+      if (normalizedQuery !== '') {
+        const haystack = [
+          card.title,
+          card.note ?? '',
+          card.uniqueId === undefined ? '' : String(card.uniqueId),
+          card.executorName ?? '',
+        ].join(' ').toLowerCase()
+        if (!haystack.includes(normalizedQuery)) return false
+      }
+      if (filterBy === 'open') return card.isDone !== true
+      if (filterBy === 'done') return card.isDone === true
+      if (filterBy === 'overdue') return dueState(card) === 'overdue'
+      if (filterBy === 'unassigned') return card.executorName === undefined && card.executorId === undefined
+      return true
+    })
+    const sortedCards = [...visibleCards].sort((left, right) => {
+      if (sortBy === 'created') return (right.createdAt ?? 0) - (left.createdAt ?? 0)
+      if (sortBy === 'due') return (left.dueAt ?? Number.POSITIVE_INFINITY) - (right.dueAt ?? Number.POSITIVE_INFINITY)
+      if (sortBy === 'priority') return priorityRank(right.priority) - priorityRank(left.priority) || (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+    })
+    const taskGroups: readonly TaskGroup[] = ((): readonly TaskGroup[] => {
+      if (groupBy === 'none') return [{ key: 'all', label: '', cards: sortedCards }]
+      const buckets = new Map<string, { label: string; cards: TeambitionCardView[] }>()
+      for (const card of sortedCards) {
+        let key: string
+        let label: string
+        if (groupBy === 'tasklist') {
+          const id = listIdOfCard(card)
+          key = `tasklist:${id ?? ''}`
+          label = tasklistNameOf(card) ?? t('tasks.groupOther')
+        } else if (groupBy === 'stage') {
+          key = `stage:${card.stageId ?? ''}`
+          label = stageNameOf(card) ?? t('board.unassignedColumn')
+        } else {
+          key = `executor:${card.executorId ?? card.executorName ?? ''}`
+          label = card.executorName ?? t('tasks.groupNobody')
+        }
+        const bucket = buckets.get(key)
+        if (bucket === undefined) buckets.set(key, { label, cards: [card] })
+        else bucket.cards.push(card)
+      }
+      const entries = [...buckets.entries()]
+      // Columns and task lists keep their project order, like the Teambition
+      // task module; executors stay in first-seen order.
+      if (groupBy === 'stage' || groupBy === 'tasklist') {
+        const ids = groupBy === 'stage'
+          ? detail.stages.map(stage => stage.id)
+          : tasklists.map(list => list.id)
+        const orderKey = (key: string): number => {
+          const id = key.slice(key.indexOf(':') + 1)
+          const index = ids.indexOf(id)
+          return index === -1 ? Number.MAX_SAFE_INTEGER : index
+        }
+        entries.sort(([left], [right]) => orderKey(left) - orderKey(right))
+      }
+      return entries.map(([key, bucket]) => ({ key, label: bucket.label, cards: bucket.cards }))
+    })()
+
+    const renderTaskRow = (card: TeambitionCardView): ReactElement => {
+      const priority = priorityLabel(card.priority)
+      const running = runningCardId === card.id
+      const pending = pendingCardId === card.id
+      const error = cardErrors[card.id]
+      const open = activeCardId === card.id
+      return (
+        <div
+          key={card.id}
+          role="row"
+          tabIndex={0}
+          className={open ? `${css.taskRow} ${css.taskRowActive}` : css.taskRow}
+          data-dsh-part="task-row"
+          data-card-id={card.id}
+          data-done={card.isDone === true ? 'true' : 'false'}
+          data-overdue={dueState(card) === 'overdue' ? 'true' : 'false'}
+          aria-selected={open}
+          onClick={() => { setActiveCardId(card.id) }}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            setActiveCardId(card.id)
+          }}
+        >
+          <span role="cell" className={`${css.taskCell} ${css.colTask}`}>
+            {priority === undefined ? null : (
+              <span className={css.priorityFlag} data-dsh-part="priority" data-priority={String(card.priority)}>{priority}</span>
+            )}
+            {card.uniqueId === undefined ? null : <span className={css.taskNumber}>#{String(card.uniqueId)}</span>}
+            <span className={card.isDone === true ? `${css.taskTitle} ${css.taskTitleDone}` : css.taskTitle}>{card.title}</span>
+            {card.subtaskCount === undefined || card.subtaskCount === 0 ? null : (
+              <span className={css.metaCount}>{t('tasks.subtasks', { count: String(card.subtaskCount) })}</span>
+            )}
+            {card.commentsCount === undefined || card.commentsCount === 0 ? null : (
+              <span className={css.metaCount}>{t('tasks.comments', { count: String(card.commentsCount) })}</span>
+            )}
+            {card.isDone === true ? <span className={css.doneBadge}>{t('tasks.done')}</span> : null}
+            {error === undefined ? null : <span className={css.cardError} role="alert">{error}</span>}
+          </span>
+          <span role="cell" className={`${css.taskCell} ${css.colExecutor}`}>{renderExecutor(card, true)}</span>
+          <span role="cell" className={`${css.taskCell} ${css.colDue}`}>{renderDue(card)}</span>
+          <span role="cell" className={`${css.taskCell} ${css.colStage}`}>
+            {stageNameOf(card) === undefined ? <span className={css.muted}>-</span> : stageNameOf(card)}
+          </span>
+          <span role="cell" className={`${css.taskCell} ${css.colUpdated}`}>{formatMoment(card.updatedAt)}</span>
+          <span className={css.rowActions}>
+            <button
+              type="button"
+              className={`${css.button} ${css.primary}`}
+              disabled={running || pending || runningCardId !== undefined}
+              onClick={event => { event.stopPropagation(); void runCard(card) }}
+            >
+              {running ? <><span className={css.spinner} aria-hidden="true" /> {t('card.running')}</> : t('card.run')}
+            </button>
+            <a className={css.link} href={card.url} target="_blank" rel="noreferrer" onClick={event => { event.stopPropagation() }}>
+              {t('tasks.open')}
+            </a>
+          </span>
+        </div>
+      )
+    }
+
+    const activeCard = activeCardId === undefined ? undefined : cards.find(card => card.id === activeCardId)
+
+    /** Detail drawer of the selected task. */
+    const renderTaskDetail = (card: TeambitionCardView): ReactElement => {
+      const choice = cardChoice(card, state.settings)
+      const boundWorkspace = choice === undefined ? undefined : roster.find(item => item.workspaceId === choice.workspaceId)
+      const chipText = choice === undefined
+        ? t('board.unboundWorkspace')
+        : (boundWorkspace === undefined ? choice.workspaceId : workspaceTitle(boundWorkspace))
+      const running = runningCardId === card.id
+      const busy = runningCardId !== undefined || pendingCardId !== undefined || pendingCardId === card.id
+      const error = cardErrors[card.id]
+      const row = (label: string, value: ReactElement | string): ReactElement => (
+        <div className={css.drawerRow} key={label}>
+          <span className={css.drawerLabel}>{label}</span>
+          <span className={css.drawerValue}>{value}</span>
+        </div>
+      )
+      const priority = priorityLabel(card.priority)
+      return (
+        <aside className={css.drawer} data-dsh-part="task-detail" data-card-id={card.id} aria-label={t('detail.title')}>
+          <header className={css.drawerHead}>
+            <h3 className={css.drawerTitle}>{card.title}</h3>
+            <button type="button" className={css.button} onClick={() => { setActiveCardId(undefined) }}>{t('detail.close')}</button>
+          </header>
+          <div className={css.drawerFacts}>
+            {card.uniqueId === undefined ? null : row(t('detail.taskId'), `#${String(card.uniqueId)}`)}
+            {priority === undefined ? null : row(t('toolbar.sortPriority'), priority)}
+            {row(t('detail.executor'), renderExecutor(card, true))}
+            {row(t('detail.due'), renderDue(card))}
+            {row(t('detail.stage'), stageNameOf(card) ?? '-')}
+            {row(t('detail.tasklist'), tasklistNameOf(card) ?? '-')}
+            {row(t('detail.created'), formatTime(card.createdAt))}
+            {row(t('detail.updated'), formatTime(card.updatedAt))}
+          </div>
+          <section className={css.drawerSection}>
+            <h4 className={css.drawerSectionTitle}>{t('detail.note')}</h4>
+            <p className={css.drawerNote}>{card.note === undefined || card.note.trim() === '' ? t('detail.noNote') : card.note}</p>
+          </section>
+          {error === undefined ? null : <p className={css.cardError} role="alert">{error}</p>}
+          <div className={css.drawerActions}>
+            <button type="button" className={`${css.button} ${css.primary}`} disabled={busy} onClick={() => { void runCard(card) }}>
+              {running ? <><span className={css.spinner} aria-hidden="true" /> {t('card.running')}</> : t('card.run')}
+            </button>
+            <a className={css.link} href={card.url} target="_blank" rel="noreferrer">{t('card.openExternal')}</a>
+          </div>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('card.bindingLabel')}</span>
+            <select
+              className={css.tableSelect}
+              value={choice === undefined ? '' : choice.workspaceId}
+              disabled={busy}
+              title={chipText}
+              onChange={event => { void bindCard(card, event.target.value) }}
+            >
+              <option value="">{t('settings.workspaceUnbound')}</option>
+              {roster.map(item => <option key={item.workspaceId} value={item.workspaceId}>{workspaceTitle(item)}</option>)}
+            </select>
+          </label>
+          {detail.stages.length === 0 ? null : (
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('board.moveStage')}</span>
+              <select
+                className={css.tableSelect}
+                value={card.stageId ?? ''}
+                disabled={busy}
+                onChange={event => { void changeStage(card.id, event.target.value) }}
+              >
+                <option value="">{t('board.unassignedColumn')}</option>
+                {detail.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+              </select>
+            </label>
+          )}
+        </aside>
+      )
+    }
+
+    /** The Teambition task module: toolbar, task table and the detail drawer. */
+    const renderTasks = (): ReactElement => (
+      <div className={css.taskView} data-dsh-part="task-view">
+        <div className={css.taskMain}>
+        <div className={css.toolbar} data-dsh-part="task-toolbar">
+          <input
+            type="search"
+            className={css.searchInput}
+            value={query}
+            placeholder={t('toolbar.searchPlaceholder')}
+            aria-label={t('toolbar.search')}
+            onChange={event => { setQuery(event.target.value) }}
+          />
+          <label className={css.toolbarField}>
+            <span>{t('toolbar.group')}</span>
+            <select className={css.select} value={groupBy} onChange={event => { setGroupBy(event.target.value as TaskGrouping) }}>
+              <option value="none">{t('toolbar.groupNone')}</option>
+              <option value="tasklist">{t('toolbar.groupTasklist')}</option>
+              <option value="stage">{t('toolbar.groupStage')}</option>
+              <option value="executor">{t('toolbar.groupExecutor')}</option>
+            </select>
+          </label>
+          <label className={css.toolbarField}>
+            <span>{t('toolbar.filter')}</span>
+            <select className={css.select} value={filterBy} onChange={event => { setFilterBy(event.target.value as TaskFilter) }}>
+              <option value="all">{t('toolbar.filterAll')}</option>
+              <option value="open">{t('toolbar.filterOpen')}</option>
+              <option value="done">{t('toolbar.filterDone')}</option>
+              <option value="overdue">{t('toolbar.filterOverdue')}</option>
+              <option value="unassigned">{t('toolbar.filterUnassigned')}</option>
+            </select>
+          </label>
+          <label className={css.toolbarField}>
+            <span>{t('toolbar.sort')}</span>
+            <select className={css.select} value={sortBy} onChange={event => { setSortBy(event.target.value as TaskSort) }}>
+              <option value="updated">{t('toolbar.sortUpdated')}</option>
+              <option value="created">{t('toolbar.sortCreated')}</option>
+              <option value="due">{t('toolbar.sortDue')}</option>
+              <option value="priority">{t('toolbar.sortPriority')}</option>
+            </select>
+          </label>
+          <span className={css.spacer} />
+          <span className={css.toolbarCount} data-dsh-part="task-count">
+            {t('toolbar.count', { shown: String(sortedCards.length), total: String(cards.length) })}
+          </span>
+        </div>
+        {sortedCards.length === 0 ? (
+          <div className={css.stateBox} data-dsh-part="tasks-empty">
+            <span>{t('tasks.empty')}</span>
+            <span className={css.hint}>{t('tasks.emptyHint')}</span>
+          </div>
+        ) : (
+          <div className={css.taskTable} role="table" data-dsh-part="task-table">
+            <div className={`${css.taskRow} ${css.taskHeadRow}`} role="row">
+              <span role="columnheader" className={`${css.taskCell} ${css.colTask}`}>{t('tasks.colTask')}</span>
+              <span role="columnheader" className={`${css.taskCell} ${css.colExecutor}`}>{t('tasks.colExecutor')}</span>
+              <span role="columnheader" className={`${css.taskCell} ${css.colDue}`}>{t('tasks.colDue')}</span>
+              <span role="columnheader" className={`${css.taskCell} ${css.colStage}`}>{t('tasks.colStage')}</span>
+              <span role="columnheader" className={`${css.taskCell} ${css.colUpdated}`}>{t('tasks.colUpdated')}</span>
+              <span role="columnheader" className={css.rowActions} />
+            </div>
+            {taskGroups.map(group => (
+              <section key={group.key} className={css.taskGroup} data-dsh-part="task-group" data-group-key={group.key}>
+                {groupBy === 'none' ? null : (
+                  <h3 className={css.groupHead}>
+                    <span>{group.label}</span>
+                    <span className={css.columnCount}>{String(group.cards.length)}</span>
+                  </h3>
+                )}
+                {group.cards.map(card => renderTaskRow(card))}
+              </section>
+            ))}
+          </div>
+        )}
+        {createForm}
+        </div>
+        {activeCard === undefined ? null : renderTaskDetail(activeCard)}
+      </div>
+    )
+
+    const boardBody = (
       <>
         {grouped ? (
           <div className={css.tasklistGroups} data-dsh-part="tasklist-groups">
@@ -670,61 +1190,11 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             </a>
           </div>
         ) : null}
-        <form className={css.boxed} data-dsh-part="create" onSubmit={event => { void submitCreate(event) }}>
-          <h3 className={css.formTitle}>{t('create.title')}</h3>
-          <div className={css.formGrid}>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('create.title')}</span>
-              <input
-                className={css.input}
-                value={draftTitle}
-                disabled={creating}
-                placeholder={t('create.titlePlaceholder')}
-                onChange={event => { setDraftTitle(event.target.value) }}
-              />
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('create.notePlaceholder')}</span>
-              <input
-                className={css.input}
-                value={draftNote}
-                disabled={creating}
-                placeholder={t('create.notePlaceholder')}
-                onChange={event => { setDraftNote(event.target.value) }}
-              />
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('create.stage')}</span>
-              <select
-                className={css.tableSelect}
-                value={draftStageId}
-                disabled={creating}
-                onChange={event => { setDraftStageId(event.target.value) }}
-              >
-                <option value="">{t('board.unassignedColumn')}</option>
-                {grouped
-                  ? tasklists.flatMap(list => {
-                      const listStages = detail.stages.filter(stage => stage.tasklistId === list.id)
-                      return listStages.length === 0
-                        ? []
-                        : [(
-                            <optgroup key={list.id} label={list.name}>
-                              {listStages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-                            </optgroup>
-                          )]
-                    })
-                  : detail.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-              </select>
-            </label>
-            <button type="submit" className={`${css.button} ${css.primary}`} disabled={creating}>
-              {creating ? t('create.submitting') : t('create.submit')}
-            </button>
-          </div>
-          {createError === undefined ? null : <p className={css.cardError} role="alert">{createError}</p>}
-          {activeProject === undefined ? null : <p className={css.hint}>{activeProject.name}</p>}
-        </form>
+        {createForm}
       </>
     )
+
+    body = view === 'tasks' ? renderTasks() : boardBody
   }
 
   return (
