@@ -4,6 +4,27 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-21
+
+### Added
+
+- Completed cards are marked on every surface: board cards prefix the title with
+  a green check and strike it through, task list rows show a "done" badge, and
+  the detail drawer gains a state row plus a check next to the title. The check
+  reads its label from the locale, so screen readers announce it instead of a
+  bare glyph.
+
+### Removed
+
+- The "Move to column" select on cards and in the drawer. Dragging a card
+  between columns covers the same need, and the select duplicated it with a
+  heavier footprint on every card.
+
+### Tests
+
+- One case asserting the completed card shows the check and that the removed
+  move select is gone (149 tests in total).
+
 ## [0.5.1] - 2026-10-21
 
 ### Fixed

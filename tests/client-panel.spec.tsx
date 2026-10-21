@@ -594,34 +594,22 @@ describe('TeambitionPanel quick add and moves', () => {
     })
   })
 
-  it('routes a card move by the kind of the chosen column', async () => {
-    const h = harness()
+  it('marks a completed card with a check mark', async () => {
+    const open = harness()
+    const openContainer = await mountOnBoard({ sessions: open.sessions, workspaces: open.workspaces, uiWorkspace: open.uiWorkspace, api: open.api })
+    await until(() => openContainer.querySelectorAll('[data-dsh-part="card"]').length > 0, 'the board cards')
+    expect(openContainer.querySelector('[data-dsh-part="card-done"]')).toBeNull()
+
+    const completed: TeambitionProjectDetail = {
+      ...DETAIL,
+      cards: DETAIL.cards.map(card => ({ ...card, isDone: true })),
+    }
+    const h = harness(stateView(), completed)
     const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
-    await until(() => container.querySelector('[data-dsh-part="card-move"]') !== null, 'the card move select')
-
-    // t1 sits in s1 (stage column): moving to s2 calls the stage route.
-    const move = container.querySelector('[data-dsh-part="card"] [data-dsh-part="card-move"]') as HTMLSelectElement
-    expect(move.value).toBe('s1')
-    expect([...move.options].map(option => option.value)).toEqual(['', 's1', 's2'])
-    await act(async () => { pickOption(move, 's2') })
-    await until(() => h.setTaskStage.mock.calls.length > 0, 'the stage move')
-
-    expect(h.setTaskStage.mock.calls[0][0]).toEqual({ taskId: 't1', stageId: 's2' })
-    expect(h.setTaskStatus).not.toHaveBeenCalled()
-  })
-
-  it('moves a card to a status column through the workflow route', async () => {
-    const h = harness(stateView(), DETAIL_STATUS)
-    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
-    await until(() => container.querySelector('[data-dsh-part="card-move"]') !== null, 'the card move select')
-
-    const move = container.querySelector('[data-dsh-part="card"] [data-dsh-part="card-move"]') as HTMLSelectElement
-    expect(move.value).toBe('st2')
-    await act(async () => { pickOption(move, 'st3') })
-    await until(() => h.setTaskStatus.mock.calls.length > 0, 'the status move')
-
-    expect(h.setTaskStatus.mock.calls[0][0]).toEqual({ taskId: 't1', statusId: 'st3' })
-    expect(h.setTaskStage).not.toHaveBeenCalled()
+    await until(() => container.querySelector('[data-dsh-part="card-done"]') !== null, 'the done check')
+    expect(container.querySelector('[data-dsh-part="card-done"]')?.getAttribute('aria-label')).toBe(zh['tasks.done'])
+    // The move select is gone: dragging is the only way to change a column.
+    expect(container.querySelector('[data-dsh-part="card-move"]')).toBeNull()
   })
 })
 

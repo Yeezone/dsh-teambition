@@ -1042,9 +1042,6 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             : columnCards.map(card => renderCard({
                 card,
                 statusName: statusNameOf(card),
-                columns: moveColumns,
-                currentColumnId: columnIdOf(card, moveColumns) ?? '',
-                statusView,
                 settings: state.settings,
                 roster,
                 detail,
@@ -1058,7 +1055,6 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
                 onDragEnd: () => { setDraggingCardId(undefined); setDropColumnId(undefined) },
                 onRun: () => { void runCard(card) },
                 onStatus: statusId => { void changeStatus(card.id, statusId) },
-                onStage: stageId => { void changeStage(card.id, stageId) },
                 onBind: workspaceId => { void bindCard(card, workspaceId) },
               }))}
         </div>
@@ -1333,7 +1329,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             {card.commentsCount === undefined || card.commentsCount === 0 ? null : (
               <span className={css.metaCount}>{t('tasks.comments', { count: String(card.commentsCount) })}</span>
             )}
-            {card.isDone === true ? <span className={css.doneBadge}>{t('tasks.done')}</span> : null}
+            {card.isDone === true ? <span className={css.doneBadge} data-dsh-part="row-done">✓ {t('tasks.done')}</span> : null}
             {error === undefined ? null : <span className={css.cardError} role="alert">{error}</span>}
           </span>
           <span role="cell" className={`${css.taskCell} ${css.colExecutor}`}>{renderExecutor(card, true)}</span>
@@ -1386,10 +1382,14 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       return (
         <aside className={css.drawer} data-dsh-part="task-detail" data-card-id={card.id} aria-label={t('detail.title')}>
           <header className={css.drawerHead}>
-            <h3 className={css.drawerTitle}>{card.title}</h3>
+            <h3 className={css.drawerTitle}>
+              {card.isDone === true ? <span className={css.doneMark} data-dsh-part="drawer-done" role="img" aria-label={t('tasks.done')}>✓</span> : null}
+              {card.title}
+            </h3>
             <button type="button" className={css.button} onClick={() => { setActiveCardId(undefined) }}>{t('detail.close')}</button>
           </header>
           <div className={css.drawerFacts}>
+            {row(t('tasks.state'), card.isDone === true ? t('tasks.done') : t('tasks.notDone'))}
             {card.uniqueId === undefined ? null : row(t('detail.taskId'), `#${String(card.uniqueId)}`)}
             {priority === undefined ? null : row(t('toolbar.sortPriority'), priority)}
             {row(t('detail.executor'), renderExecutor(card, true))}
@@ -1424,27 +1424,6 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
               {roster.map(item => <option key={item.workspaceId} value={item.workspaceId}>{workspaceTitle(item)}</option>)}
             </select>
           </label>
-          {columns.length === 0 ? null : (
-            <label className={css.field} data-dsh-part="task-move">
-              <span className={css.fieldLabel}>{statusView ? t('board.status') : t('board.moveStage')}</span>
-              <select
-                className={css.tableSelect}
-                value={columnIdOf(card, columns) ?? ''}
-                disabled={busy}
-                onChange={event => {
-                  const column = columns.find(candidate => candidate.id === event.target.value)
-                  if (column === undefined) return
-                  // Stage columns move through the kanban endpoint, status columns
-                  // through the workflow endpoint: the column kind picks the call.
-                  if (column.kind === 'status') void changeStatus(card.id, column.id)
-                  else void changeStage(card.id, column.id)
-                }}
-              >
-                <option value="">{t('board.unassignedColumn')}</option>
-                {columns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
-              </select>
-            </label>
-          )}
         </aside>
       )
     }
@@ -1603,12 +1582,6 @@ interface CardProps {
   readonly card: TeambitionCardView
   /** Column (stage or workflow status) name of the card, when known. */
   readonly statusName: string | undefined
-  /** Every column of the resolved view, for the movement select. */
-  readonly columns: readonly TeambitionColumnView[]
-  /** Column the card currently sits in; empty when it sits outside the view. */
-  readonly currentColumnId: string
-  /** Whether the view draws workflow statuses instead of kanban stages. */
-  readonly statusView: boolean
   readonly settings: TeambitionSettingsView
   readonly roster: readonly WorkspaceItemView[]
   readonly detail: TeambitionProjectDetail
@@ -1623,18 +1596,17 @@ interface CardProps {
   readonly onDragEnd: () => void
   readonly onRun: () => void
   readonly onStatus: (statusId: string) => void
-  readonly onStage: (stageId: string) => void
   readonly onBind: (workspaceId: string) => void
 }
 
 /**
- * Render one card: title, status badge, workspace chip, stage/status moves and
- * the run action.
+ * Render one card: title, status badge, workspace chip, the run action and the
+ * complete/advance buttons that write workflow statuses.
  * @param props - the card plus its resolved facts and action callbacks.
  * @returns the card element.
  */
 function renderCard(props: CardProps): ReactElement {
-  const { card, statusName, columns, currentColumnId, statusView, roster, detail, running, pending, busy, error, choice, dragging } = props
+  const { card, statusName, roster, detail, running, pending, busy, error, choice, dragging } = props
   const boundWorkspace = choice === undefined ? undefined : roster.find(item => item.workspaceId === choice.workspaceId)
   const chipText = choice === undefined
     ? t('board.unboundWorkspace')
@@ -1672,7 +1644,10 @@ function renderCard(props: CardProps): ReactElement {
       }}
       onDragEnd={() => { props.onDragEnd() }}
     >
-      <h4 className={css.cardTitle}>{card.title}</h4>
+      <h4 className={card.isDone === true ? `${css.cardTitle} ${css.cardTitleDone}` : css.cardTitle}>
+        {card.isDone === true ? <span className={css.doneMark} data-dsh-part="card-done" role="img" aria-label={t('tasks.done')}>✓</span> : null}
+        {card.title}
+      </h4>
       <div className={css.cardMeta}>
         {statusName === undefined ? null : <span className={css.badge} data-dsh-part="status">{statusName}</span>}
         <span
@@ -1720,27 +1695,6 @@ function renderCard(props: CardProps): ReactElement {
           {roster.map(item => <option key={item.workspaceId} value={item.workspaceId}>{workspaceTitle(item)}</option>)}
         </select>
       </label>
-
-      {columns.length === 0 ? null : (
-        <label className={css.field}>
-          <span className={css.fieldLabel}>{statusView ? t('board.status') : t('board.moveStage')}</span>
-          <select
-            className={css.tableSelect}
-            data-dsh-part="card-move"
-            value={currentColumnId}
-            disabled={busy || pending}
-            onChange={event => {
-              const column = columns.find(candidate => candidate.id === event.target.value)
-              if (column === undefined) return
-              if (column.kind === 'status') props.onStatus(column.id)
-              else props.onStage(column.id)
-            }}
-          >
-            <option value="">{t('board.unassignedColumn')}</option>
-            {columns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
-          </select>
-        </label>
-      )}
     </article>
   )
 }
