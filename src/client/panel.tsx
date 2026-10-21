@@ -20,6 +20,7 @@ import {
   type TeambitionBindRequest,
   type TeambitionCardBinding,
   type TeambitionCardView,
+  type TeambitionColumnView,
   type TeambitionConfigRequest,
   type TeambitionProjectDetail,
   type TeambitionProjectBinding,
@@ -27,6 +28,7 @@ import {
   type TeambitionStateView,
   type TeambitionStatusView,
   type TeambitionStageView,
+  type TeambitionViewView,
   type TeambitionWorkspaceChoice,
 } from '../core/protocol.ts'
 import { TeambitionApi, type TeambitionApiFace } from './api.ts'
@@ -89,6 +91,134 @@ function writeSelection(selection: TeambitionSelection): void {
   }
 }
 
+/**
+ * localStorage key of the saved view remembered per project.
+ *
+ * A saved view ("智能视图") is a project fact, so the map is keyed by project id:
+ * opening project A on its status board never changes the view project B opens on.
+ */
+export const VIEW_STORAGE_KEY = 'dsh.teambition.views.v1'
+
+/** Remembered saved view ids, keyed by Teambition project id. */
+type ViewByProject = Record<string, string>
+
+/**
+ * Read the remembered view map.
+ * @returns every remembered `{ projectId: viewId }` pair; empty when none/unreadable.
+ */
+function readViews(): ViewByProject {
+  try {
+    if (typeof localStorage === 'undefined') return {}
+    const raw = localStorage.getItem(VIEW_STORAGE_KEY)
+    if (raw === null) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+    const views: ViewByProject = {}
+    for (const [projectId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (projectId !== '' && typeof value === 'string' && value !== '') views[projectId] = value
+    }
+    return views
+  } catch {
+    // Storage disabled or holding unrelated JSON: no remembered view.
+    return {}
+  }
+}
+
+/**
+ * Remember (or forget) the saved view of one project.
+ * @param projectId - project the view belongs to.
+ * @param viewId - saved view id; undefined forgets the entry.
+ */
+function writeView(projectId: string, viewId: string | undefined): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    const views = readViews()
+    if (viewId === undefined) delete views[projectId]
+    else views[projectId] = viewId
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(views))
+  } catch {
+    // Storage disabled: keep the in-memory view, never fail the panel.
+  }
+}
+
+/** The remembered saved view of one project, read once for the initial state. */
+function rememberedView(projectId: string | undefined): string | undefined {
+  return projectId === undefined ? undefined : readViews()[projectId]
+}
+
+/** A project's saved views, or an empty list when the payload carries none. */
+function viewsOf(detail: TeambitionProjectDetail): readonly TeambitionViewView[] {
+  return detail.views ?? []
+}
+
+/**
+ * A project's board columns, falling back to its stages for an older host payload.
+ * @param detail - project detail read from the host.
+ * @returns the columns of the resolved view, in board order.
+ */
+function columnsOfDetail(detail: TeambitionProjectDetail): readonly TeambitionColumnView[] {
+  const columns = detail.columns ?? []
+  if (columns.length > 0) return columns
+  return detail.stages.map(stage => ({
+    id: stage.id,
+    name: stage.name,
+    kind: 'stage',
+    ...(stage.tasklistId === undefined ? {} : { tasklistId: stage.tasklistId }),
+  }))
+}
+
+/** Whether the resolved view draws workflow statuses instead of kanban stages. */
+function isStatusView(view: TeambitionViewView | undefined, columns: readonly TeambitionColumnView[]): boolean {
+  if (view !== undefined) return view.vertical === 'status'
+  return columns.length > 0 && columns.every(column => column.kind === 'status')
+}
+
+/**
+ * The board column a card sits in.
+ *
+ * Columns are matched by kind: a stage column owns the card's `stageId`, a status
+ * column the card's `statusId`; the first match wins (status views only carry
+ * status columns, stage views only stage columns).
+ * @param card - card to place.
+ * @param columns - columns of the resolved view.
+ * @returns the matching column id, or undefined when the card sits outside them.
+ */
+function columnIdOf(card: TeambitionCardView, columns: readonly TeambitionColumnView[]): string | undefined {
+  for (const column of columns) {
+    if (column.kind === 'stage' && card.stageId === column.id) return column.id
+    if (column.kind === 'status' && card.statusId === column.id) return column.id
+  }
+  return undefined
+}
+
+/**
+ * Ids of the workflow START statuses of a project.
+ *
+ * A status board can only receive a new card in a start status (the host sends
+ * `_taskflowstatusId` next to `_scenariofieldconfigId`), so the create form asks
+ * this set which columns are valid targets.
+ * @param detail - project detail read from the host.
+ * @returns the ids of `kind: 'start'` statuses of every workflow.
+ */
+function startStatusIdsOf(detail: TeambitionProjectDetail): ReadonlySet<string> {
+  const ids = new Set<string>()
+  for (const workflow of detail.workflows ?? []) {
+    for (const status of workflow.statuses) if (status.kind === 'start') ids.add(status.id)
+  }
+  for (const status of detail.statuses) if (status.kind === 'start') ids.add(status.id)
+  return ids
+}
+
+/**
+ * First column a new card can be created in.
+ * @param columns - columns of the resolved view.
+ * @param startIds - ids of the workflow start statuses.
+ * @returns the first status column with a start status, when there is one.
+ */
+function firstStartColumn(columns: readonly TeambitionColumnView[], startIds: ReadonlySet<string>): TeambitionColumnView | undefined {
+  return columns.find(column => column.kind === 'status' && startIds.has(column.id))
+}
+
 /** Teambition web board of one project, for the empty-state external link. */
 function projectBoardUrl(projectId: string): string {
   return `https://www.teambition.com/project/${encodeURIComponent(projectId)}/board`
@@ -104,7 +234,7 @@ function projectBoardUrl(projectId: string): string {
 interface TasklistGroup {
   readonly id: string
   readonly name: string
-  readonly stages: readonly TeambitionStageView[]
+  readonly columns: readonly TeambitionColumnView[]
   readonly cards: readonly TeambitionCardView[]
 }
 
@@ -303,6 +433,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const [initialSelection] = useState<TeambitionSelection>(readSelection)
   const [projectId, setProjectId] = useState<string | undefined>(initialSelection.projectId)
   const [tasklistId, setTasklistId] = useState<string | undefined>(initialSelection.tasklistId)
+  // Saved view of the project; undefined means the project's default view.
+  const [viewId, setViewId] = useState<string | undefined>(() => rememberedView(initialSelection.projectId))
   const [detail, setDetail] = useState<TeambitionProjectDetail>()
   const [detailPhase, setDetailPhase] = useState<Phase>('idle')
   const [detailError, setDetailError] = useState<string>()
@@ -315,7 +447,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
 
   const [draftTitle, setDraftTitle] = useState('')
   const [draftNote, setDraftNote] = useState('')
-  const [draftStageId, setDraftStageId] = useState('')
+  /** Board column the create form pre-selects (a stage id or a status id). */
+  const [draftColumnId, setDraftColumnId] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string>()
 
@@ -352,6 +485,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   /** Read sequence guard: a stale project read must not overwrite a newer one. */
   const projectSeq = useRef(0)
 
+  /** Title input of the create form, focused by a column's quick-add button. */
+  const titleInput = useRef<HTMLInputElement>(null)
+
   // The roster is a live service fact: follow the list instead of snapshotting.
   useEffect(() => {
     const read = (): void => { setRoster([...workspaceService.list.getSnapshot().items]) }
@@ -374,12 +510,15 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     return result.value
   }, [api])
 
-  /** Read one project (columns, statuses, cards) — one task list, or all of them. */
-  const loadProject = useCallback(async (id: string, list: string | undefined): Promise<void> => {
+  /**
+   * Read one project (saved views, columns, statuses, cards) — one task list, or
+   * all of them — resolved for one saved view (absent means the default view).
+   */
+  const loadProject = useCallback(async (id: string, list: string | undefined, savedView: string | undefined): Promise<void> => {
     const seq = ++projectSeq.current
     setDetailPhase('loading')
     setDetailError(undefined)
-    const result = await api.fetchProject(id, list)
+    const result = await api.fetchProject(id, list, savedView)
     if (seq !== projectSeq.current) return
     if (!result.ok) {
       setDetailPhase('failed')
@@ -398,8 +537,12 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   useEffect(() => {
     if (state === undefined) return
     if (projectId !== undefined && state.projects.some(project => project.id === projectId)) return
-    setProjectId(state.projects[0]?.id)
+    const next = state.projects[0]?.id
+    setProjectId(next)
     setTasklistId(undefined)
+    // The previous project's saved view does not apply to the new one: use the
+    // view remembered for that project, or its default view.
+    setViewId(rememberedView(next))
   }, [state, projectId])
 
   // Remember every explicit selection for the next visit.
@@ -408,15 +551,30 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     writeSelection(tasklistId === undefined ? { projectId } : { projectId, tasklistId })
   }, [projectId, tasklistId])
 
-  // Read the board: the selected task list, or every list of the project.
+  // Remember the saved view per project, so the board reopens on it next visit.
+  useEffect(() => {
+    if (projectId === undefined) return
+    writeView(projectId, viewId)
+  }, [projectId, viewId])
+
+  // A remembered view the project no longer has (deleted/renamed) drops back to
+  // the default view instead of leaving the board on an unknown id.
+  useEffect(() => {
+    if (viewId === undefined || detail === undefined || detail.project.id !== projectId) return
+    if (viewsOf(detail).some(view => view.id === viewId)) return
+    setViewId(undefined)
+  }, [detail, projectId, viewId])
+
+  // Read the board: the selected task list, or every list of the project, in the
+  // selected saved view.
   useEffect(() => {
     if (projectId === undefined) {
       setDetail(undefined)
       setDetailPhase('idle')
       return
     }
-    void loadProject(projectId, tasklistId)
-  }, [projectId, tasklistId, loadProject])
+    void loadProject(projectId, tasklistId, viewId)
+  }, [projectId, tasklistId, viewId, loadProject])
 
   // A remembered/selected task list that the project no longer has drops back to
   // "all task lists" instead of leaving the board on a nonexistent id.
@@ -444,8 +602,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     setTasklistFilter('')
   }, [detail, tasklistFilter])
 
-  // The create form's column picker only offers the selected task list's columns.
-  useEffect(() => { setDraftStageId('') }, [projectId, tasklistId])
+  // The create form's column picker only offers the selected view's columns.
+  useEffect(() => { setDraftColumnId('') }, [projectId, tasklistId, viewId])
 
   const setCardError = useCallback((cardId: string, message: string | undefined): void => {
     setCardErrors(previous => {
@@ -469,9 +627,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     const projects = await api.refreshProjects()
     if (!projects.ok) flash(t('error.generic', { message: projects.error.message }), true)
     await loadState()
-    if (projectId !== undefined) await loadProject(projectId, tasklistId)
+    if (projectId !== undefined) await loadProject(projectId, tasklistId, viewId)
     setBusy(false)
-  }, [api, flash, loadProject, loadState, projectId, tasklistId])
+  }, [api, flash, loadProject, loadState, projectId, tasklistId, viewId])
 
   /** Resolved execution workspace of one card (host value, else the contract). */
   const cardChoice = useCallback((card: TeambitionCardView, settings: TeambitionSettingsView): TeambitionWorkspaceChoice | undefined => {
@@ -523,9 +681,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     setCardError(taskId, undefined)
     const result = await api.setTaskStatus({ taskId, statusId })
     if (!result.ok) setCardError(taskId, t('error.generic', { message: result.error.message }))
-    else if (projectId !== undefined) await loadProject(projectId, tasklistId)
+    else if (projectId !== undefined) await loadProject(projectId, tasklistId, viewId)
     setPendingCardId(undefined)
-  }, [api, loadProject, pendingCardId, projectId, tasklistId, setCardError])
+  }, [api, loadProject, pendingCardId, projectId, tasklistId, viewId, setCardError])
 
   /** Move one card to another kanban column, then re-read the project. */
   const changeStage = useCallback(async (taskId: string, stageId: string): Promise<void> => {
@@ -534,9 +692,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     setCardError(taskId, undefined)
     const result = await api.setTaskStage({ taskId, stageId })
     if (!result.ok) setCardError(taskId, t('error.generic', { message: result.error.message }))
-    else if (projectId !== undefined) await loadProject(projectId, tasklistId)
+    else if (projectId !== undefined) await loadProject(projectId, tasklistId, viewId)
     setPendingCardId(undefined)
-  }, [api, loadProject, pendingCardId, projectId, tasklistId, setCardError])
+  }, [api, loadProject, pendingCardId, projectId, tasklistId, viewId, setCardError])
 
   /** Persist one card's workspace override (empty id clears it). */
   const bindCard = useCallback(async (card: TeambitionCardView, workspaceId: string): Promise<void> => {
@@ -562,7 +720,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     setPendingCardId(undefined)
   }, [api, flash, loadState, pendingCardId, setCardError, state])
 
-  /** Create a card in the selected project, then re-read it. */
+  /** Create a card in the selected project/view, then re-read it. */
   const submitCreate = useCallback(async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     if (projectId === undefined || creating) return
@@ -575,14 +733,29 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     setCreateError(undefined)
     // The card belongs to the selected task list; with "all task lists" shown,
     // the chosen column names the list it belongs to.
-    const stage = detail?.stages.find(candidate => candidate.id === draftStageId)
-    const cardTasklistId = tasklistId ?? stage?.tasklistId
+    const columns = detail === undefined ? [] : columnsOfDetail(detail)
+    const activeView = detail === undefined
+      ? undefined
+      : viewsOf(detail).find(candidate => candidate.id === (viewId ?? detail.viewId))
+    const statusView = isStatusView(activeView, columns)
+    const chosen = columns.find(column => column.id === draftColumnId)
+    const cardTasklistId = tasklistId ?? chosen?.tasklistId
+    // A status board creates in a workflow START status and needs the view's task
+    // type; a stage board creates in a kanban column and sends no scenario id.
+    const startIds = detail === undefined ? new Set<string>() : startStatusIdsOf(detail)
+    const statusId = statusView
+      ? (chosen !== undefined && startIds.has(chosen.id) ? chosen.id : firstStartColumn(columns, startIds)?.id)
+      : undefined
+    const stageId = statusView ? undefined : (chosen?.kind === 'stage' ? chosen.id : undefined)
+    const scenarioConfigId = statusView ? activeView?.scenarioConfigIds[0] : undefined
     const result = await api.createTask({
       projectId,
       title,
       ...(cardTasklistId === undefined ? {} : { tasklistId: cardTasklistId }),
       ...(draftNote.trim() === '' ? {} : { note: draftNote.trim() }),
-      ...(draftStageId === '' ? {} : { stageId: draftStageId }),
+      ...(stageId === undefined ? {} : { stageId }),
+      ...(statusId === undefined ? {} : { statusId }),
+      ...(scenarioConfigId === undefined ? {} : { scenarioConfigId }),
     })
     setCreating(false)
     if (!result.ok) {
@@ -591,8 +764,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     }
     setDraftTitle('')
     setDraftNote('')
-    await loadProject(projectId, tasklistId)
-  }, [api, creating, detail, draftNote, draftStageId, draftTitle, loadProject, projectId, tasklistId])
+    await loadProject(projectId, tasklistId, viewId)
+  }, [api, creating, detail, draftColumnId, draftNote, draftTitle, loadProject, projectId, tasklistId, viewId])
 
   const settings = state?.settings
   const projects: readonly TeambitionProject[] = state?.projects ?? []
@@ -644,9 +817,11 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             disabled={busy}
             aria-label={t('header.project')}
             onChange={event => {
-              // The previous task list belongs to the previous project.
-              setProjectId(event.target.value === '' ? undefined : event.target.value)
+              // The previous task list and saved view belong to the previous project.
+              const next = event.target.value === '' ? undefined : event.target.value
+              setProjectId(next)
               setTasklistId(undefined)
+              setViewId(rememberedView(next))
             }}
           >
             {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -737,53 +912,100 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     body = (
       <div className={css.stateBox}>
         <span className={css.errorText} role="alert">{detailError ?? t('error.transport')}</span>
-        <button type="button" className={css.button} onClick={() => { if (projectId !== undefined) void loadProject(projectId, tasklistId) }}>{t('panel.retry')}</button>
+        <button type="button" className={css.button} onClick={() => { if (projectId !== undefined) void loadProject(projectId, tasklistId, viewId) }}>{t('panel.retry')}</button>
       </div>
     )
   } else if (detail === undefined) {
     body = <div className={css.stateBox}><span>{t('panel.loadingProject')}</span></div>
   } else {
-    const statusById = new Map<string, TeambitionStatusView>(detail.statuses.map(status => [status.id, status]))
+    // The board draws the columns of the resolved saved view (stage or workflow
+    // status columns), never `detail.stages` directly: a status view has no
+    // stages at all, and a stage view's saved view may reorder them.
+    const columns = columnsOfDetail(detail)
+    const views = viewsOf(detail)
+    const activeView = views.find(view => view.id === (viewId ?? detail.viewId))
+      ?? views.find(view => view.isDefault === true)
+    const resolvedViewId = activeView?.id ?? viewId ?? detail.viewId
+    const statusView = isStatusView(activeView, columns)
+    const startIds = startStatusIdsOf(detail)
     // A card's task list falls back to the list of its column: the host tags
     // both, but a payload that only tags the column must still group.
-    const stageTasklist = new Map<string, string | undefined>(detail.stages.map(stage => [stage.id, stage.tasklistId]))
-    const listIdOfCard = (card: TeambitionCardView): string | undefined =>
-      card.tasklistId ?? (card.stageId === undefined ? undefined : stageTasklist.get(card.stageId))
+    const columnTasklist = new Map<string, string | undefined>(columns.map(column => [column.id, column.tasklistId]))
+    const listIdOfCard = (card: TeambitionCardView): string | undefined => {
+      const columnId = columnIdOf(card, columns)
+      const fromColumn = columnId === undefined ? undefined : columnTasklist.get(columnId)
+      return card.tasklistId ?? fromColumn
+    }
     const knownList = (listId: string | undefined): boolean =>
       listId !== undefined && tasklists.some(list => list.id === listId)
     // Only "all task lists" with several lists needs the grouped layout: with one
-    // list the flat board already is that list's board.
-    const grouped = tasklistId === undefined && tasklists.length > 1
+    // list the flat board already is that list's board. A status view has no
+    // per-list columns, so it always renders one flat board.
+    const grouped = tasklistId === undefined && tasklists.length > 1 && columns.some(column => column.kind === 'stage')
     const groups: readonly TasklistGroup[] = grouped
       ? tasklists.map(list => ({
           id: list.id,
           name: list.name,
-          stages: detail.stages.filter(stage => stage.tasklistId === list.id),
+          columns: columns.filter(column => column.tasklistId === list.id),
           cards: cards.filter(card => listIdOfCard(card) === list.id),
         }))
       : []
     // Columns and cards the host did not attribute to a listed task list still
     // render in one trailing group instead of silently disappearing.
-    const strayStages = grouped ? detail.stages.filter(stage => !knownList(stage.tasklistId)) : []
+    const strayColumns = grouped ? columns.filter(column => !knownList(column.tasklistId)) : []
     const strayCards = grouped ? cards.filter(card => !knownList(listIdOfCard(card))) : []
 
     /** A project without declared columns still renders its cards: one bucket. */
-    const columnsOf = (stages: readonly TeambitionStageView[]): readonly TeambitionStageView[] =>
-      stages.length === 0 ? [{ id: '', name: t('board.unassignedColumn') }] : stages
+    const boardColumnsOf = (list: readonly TeambitionColumnView[]): readonly TeambitionColumnView[] =>
+      list.length === 0 ? [{ id: '', name: t('board.unassignedColumn'), kind: 'stage' }] : list
 
-    const renderColumn = (stage: TeambitionStageView, stageCards: readonly TeambitionCardView[], moveStages: readonly TeambitionStageView[]): ReactElement => (
-      <section className={css.column} key={stage.id === '' ? '__all' : stage.id} data-dsh-part="column" data-stage-id={stage.id} data-tasklist-id={stage.tasklistId ?? ''}>
-        <header className={css.columnHead}>
-          <h3 className={css.columnTitle}>{stage.name}</h3>
-          <span className={css.columnCount}>{String(stageCards.length)}</span>
+    /** Cards of one column of `allColumns`; the placeholder bucket keeps every card. */
+    const cardsIn = (
+      boardCards: readonly TeambitionCardView[],
+      column: TeambitionColumnView,
+      allColumns: readonly TeambitionColumnView[],
+    ): readonly TeambitionCardView[] =>
+      column.id === '' ? boardCards : boardCards.filter(card => columnIdOf(card, allColumns) === column.id)
+
+    const renderColumn = (column: TeambitionColumnView, columnCards: readonly TeambitionCardView[], moveColumns: readonly TeambitionColumnView[]): ReactElement => (
+      <section
+        className={css.column}
+        key={column.id === '' ? '__all' : column.id}
+        data-dsh-part="column"
+        data-column-id={column.id}
+        data-column-kind={column.kind}
+        data-tasklist-id={column.tasklistId ?? ''}
+      >
+        <header className={css.columnHead} data-dsh-part="column-head">
+          <h3 className={css.columnTitle}>{column.name}</h3>
+          <span className={css.columnCount}>{String(columnCards.length)}</span>
+          <span className={css.spacer} />
+          <button
+            type="button"
+            className={css.columnAdd}
+            data-dsh-part="column-add"
+            aria-label={t('board.addCard', { name: column.name })}
+            title={t('board.addCard', { name: column.name })}
+            disabled={column.id === ''}
+            onClick={() => {
+              // "Gutter add": pre-select the column in the create form and focus
+              // its title, so the card lands where the user clicked the plus.
+              setDraftColumnId(column.id)
+              titleInput.current?.focus()
+            }}
+          >
+            +
+          </button>
         </header>
         <div className={css.columnBody}>
-          {stageCards.length === 0
+          {columnCards.length === 0
             ? <p className={css.columnEmpty}>{t('board.empty')}</p>
-            : stageCards.map(card => renderCard({
+            : columnCards.map(card => renderCard({
                 card,
-                status: card.statusId === undefined ? undefined : statusById.get(card.statusId),
-                stages: moveStages,
+                statusName: statusNameOf(card),
+                columns: moveColumns,
+                currentColumnId: columnIdOf(card, moveColumns) ?? '',
+                statusView,
                 settings: state.settings,
                 roster,
                 detail,
@@ -802,19 +1024,63 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     )
 
     const renderBoard = (
-      stages: readonly TeambitionStageView[],
+      boardColumns: readonly TeambitionColumnView[],
       boardCards: readonly TeambitionCardView[],
-      moveStages: readonly TeambitionStageView[],
+      moveColumns: readonly TeambitionColumnView[],
       nested = false,
     ): ReactElement => (
-      <div className={nested ? `${css.board} ${css.boardNested}` : css.board} data-dsh-part="board">
-        {columnsOf(stages).map(stage => renderColumn(
-          stage,
-          stage.id === '' ? boardCards : boardCards.filter(card => card.stageId === stage.id),
-          moveStages,
+      <div
+        className={nested ? `${css.board} ${css.boardNested}` : css.board}
+        data-dsh-part="board"
+        data-view-id={resolvedViewId ?? ''}
+        data-view-vertical={statusView ? 'status' : 'stage'}
+      >
+        {boardColumnsOf(boardColumns).map(column => renderColumn(
+          column,
+          cardsIn(boardCards, column, boardColumns),
+          moveColumns,
         ))}
       </div>
     )
+
+    /** Name of the column a card sits in (status boards resolve statuses here). */
+    const statusNameOf = (card: TeambitionCardView): string | undefined => {
+      const columnId = columnIdOf(card, columns)
+      const column = columnId === undefined ? undefined : columns.find(candidate => candidate.id === columnId)
+      if (column !== undefined && column.kind === 'status') return column.name
+      return card.statusId === undefined ? undefined : detail.statuses.find(status => status.id === card.statusId)?.name
+    }
+
+    /** Left rail of the project's saved views; only shown when it has some. */
+    const renderViewRail = (): ReactElement | null => {
+      if (views.length === 0) return null
+      return (
+        <nav className={css.rail} data-dsh-part="view-rail" aria-label={t('board.viewRail')}>
+          <span className={css.railTitle}>{t('board.views')}</span>
+          {views.map(view => {
+            const active = view.id === resolvedViewId
+            return (
+              <button
+                key={view.id}
+                type="button"
+                className={active ? `${css.railItem} ${css.railItemActive}` : css.railItem}
+                data-dsh-part="view-item"
+                data-view-id={view.id}
+                data-view-vertical={view.vertical}
+                data-default={view.id === detail.viewId ? 'true' : 'false'}
+                aria-current={active ? 'true' : undefined}
+                title={view.name}
+                onClick={() => { setViewId(view.id) }}
+              >
+                <span className={css.railLabel}>{view.name}</span>
+                {view.isDefault === true ? <span className={css.railDefault}>{t('board.defaultView')}</span> : null}
+              </button>
+            )
+          })}
+        </nav>
+      )
+    }
+
 
     const createForm = (
       <form className={css.boxed} data-dsh-part="create" onSubmit={event => { void submitCreate(event) }}>
@@ -823,6 +1089,7 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('create.title')}</span>
             <input
+              ref={titleInput}
               className={css.input}
               value={draftTitle}
               disabled={creating}
@@ -841,26 +1108,33 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             />
           </label>
           <label className={css.field}>
-            <span className={css.fieldLabel}>{t('create.stage')}</span>
+            <span className={css.fieldLabel}>{statusView ? t('board.status') : t('create.stage')}</span>
             <select
               className={css.tableSelect}
-              value={draftStageId}
+              data-dsh-part="create-column"
+              value={draftColumnId}
               disabled={creating}
-              onChange={event => { setDraftStageId(event.target.value) }}
+              onChange={event => { setDraftColumnId(event.target.value) }}
             >
               <option value="">{t('board.unassignedColumn')}</option>
-              {grouped
-                ? tasklists.flatMap(list => {
-                    const listStages = detail.stages.filter(stage => stage.tasklistId === list.id)
-                    return listStages.length === 0
-                      ? []
-                      : [(
-                          <optgroup key={list.id} label={list.name}>
-                            {listStages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-                          </optgroup>
-                        )]
-                  })
-                : detail.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+              {statusView
+                // A status board can only create in a workflow START status; the
+                // other status columns stay visible but not selectable.
+                ? columns.filter(column => column.kind === 'status').map(column => (
+                    <option key={column.id} value={column.id} disabled={!startIds.has(column.id)}>{column.name}</option>
+                  ))
+                : grouped
+                  ? tasklists.flatMap(list => {
+                      const listColumns = columns.filter(column => column.tasklistId === list.id)
+                      return listColumns.length === 0
+                        ? []
+                        : [(
+                            <optgroup key={list.id} label={list.name}>
+                              {listColumns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
+                            </optgroup>
+                          )]
+                    })
+                  : columns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
             </select>
           </label>
           <button type="submit" className={`${css.button} ${css.primary}`} disabled={creating}>
@@ -872,9 +1146,17 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
       </form>
     )
 
-    /** Name of the column a card sits in. */
-    const stageNameOf = (card: TeambitionCardView): string | undefined =>
-      card.stageId === undefined ? undefined : detail.stages.find(stage => stage.id === card.stageId)?.name
+    /** Name of the column a card sits in: saved-view columns first, then stages. */
+    const stageNameOf = (card: TeambitionCardView): string | undefined => {
+      const columnId = columnIdOf(card, columns)
+      if (columnId !== undefined) return columns.find(column => column.id === columnId)?.name
+      if (card.stageId !== undefined) {
+        const stage = detail.stages.find(candidate => candidate.id === card.stageId)
+        if (stage !== undefined) return stage.name
+      }
+      if (card.statusId === undefined) return undefined
+      return detail.statuses.find(status => status.id === card.statusId)?.name
+    }
     /** Name of the task list a card belongs to. */
     const tasklistNameOf = (card: TeambitionCardView): string | undefined => {
       const id = listIdOfCard(card)
@@ -1053,6 +1335,11 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         </div>
       )
       const priority = priorityLabel(card.priority)
+      // Workflow projects bind every card to one task type; show it only when the
+      // project actually carries the scenario list.
+      const scenario = card.scenarioConfigId === undefined
+        ? undefined
+        : detail.scenarioConfigs.find(candidate => candidate.id === card.scenarioConfigId)
       return (
         <aside className={css.drawer} data-dsh-part="task-detail" data-card-id={card.id} aria-label={t('detail.title')}>
           <header className={css.drawerHead}>
@@ -1064,7 +1351,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
             {priority === undefined ? null : row(t('toolbar.sortPriority'), priority)}
             {row(t('detail.executor'), renderExecutor(card, true))}
             {row(t('detail.due'), renderDue(card))}
-            {row(t('detail.stage'), stageNameOf(card) ?? '-')}
+            {row(statusView ? t('board.status') : t('detail.stage'), stageNameOf(card) ?? '-')}
+            {scenario === undefined ? null : row(t('board.scenario'), scenario.name)}
             {row(t('detail.tasklist'), tasklistNameOf(card) ?? '-')}
             {row(t('detail.created'), formatTime(card.createdAt))}
             {row(t('detail.updated'), formatTime(card.updatedAt))}
@@ -1093,17 +1381,24 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
               {roster.map(item => <option key={item.workspaceId} value={item.workspaceId}>{workspaceTitle(item)}</option>)}
             </select>
           </label>
-          {detail.stages.length === 0 ? null : (
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('board.moveStage')}</span>
+          {columns.length === 0 ? null : (
+            <label className={css.field} data-dsh-part="task-move">
+              <span className={css.fieldLabel}>{statusView ? t('board.status') : t('board.moveStage')}</span>
               <select
                 className={css.tableSelect}
-                value={card.stageId ?? ''}
+                value={columnIdOf(card, columns) ?? ''}
                 disabled={busy}
-                onChange={event => { void changeStage(card.id, event.target.value) }}
+                onChange={event => {
+                  const column = columns.find(candidate => candidate.id === event.target.value)
+                  if (column === undefined) return
+                  // Stage columns move through the kanban endpoint, status columns
+                  // through the workflow endpoint: the column kind picks the call.
+                  if (column.kind === 'status') void changeStatus(card.id, column.id)
+                  else void changeStage(card.id, column.id)
+                }}
               >
                 <option value="">{t('board.unassignedColumn')}</option>
-                {detail.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                {columns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
               </select>
             </label>
           )}
@@ -1206,43 +1501,46 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     )
 
     const boardBody = (
-      <>
-        {grouped ? (
-          <div className={css.tasklistGroups} data-dsh-part="tasklist-groups">
-            {groups.map(group => (
-              <section className={css.tasklistGroup} key={group.id} data-dsh-part="tasklist-group" data-tasklist-id={group.id}>
-                <h3 className={css.tasklistTitle}>
-                  <span className={css.tasklistName}>{group.name}</span>
-                  <span className={css.columnCount}>{String(group.cards.length)}</span>
-                </h3>
-                {renderBoard(group.stages, group.cards, group.stages, true)}
-              </section>
-            ))}
-            {strayStages.length === 0 && strayCards.length === 0 ? null : (
-              <section className={css.tasklistGroup} data-dsh-part="tasklist-group" data-tasklist-id="">
-                <h3 className={css.tasklistTitle}>
-                  <span className={css.tasklistName}>{t('board.unassignedTasklist')}</span>
-                  <span className={css.columnCount}>{String(strayCards.length)}</span>
-                </h3>
-                {renderBoard(strayStages, strayCards, detail.stages, true)}
-              </section>
-            )}
-          </div>
-        ) : (
-          renderBoard(detail.stages, cards, detail.stages)
-        )}
-        {cards.length === 0 ? (
-          <div className={css.stateBox} data-dsh-part="board-empty">
-            <span>{t('board.empty')}</span>
-            <span className={css.hint}>{t('board.emptyHint')}</span>
-            {tasklistId !== undefined && tasklists.length > 1 ? <span className={css.hint}>{t('board.emptyTasklistHint')}</span> : null}
-            <a className={css.link} href={projectBoardUrl(detail.project.id)} target="_blank" rel="noreferrer" data-dsh-part="open-project">
-              {t('board.openProject')}
-            </a>
-          </div>
-        ) : null}
-        {createForm}
-      </>
+      <div className={css.boardFrame} data-dsh-part="board-frame">
+        {renderViewRail()}
+        <div className={css.boardArea}>
+          {grouped ? (
+            <div className={css.tasklistGroups} data-dsh-part="tasklist-groups">
+              {groups.map(group => (
+                <section className={css.tasklistGroup} key={group.id} data-dsh-part="tasklist-group" data-tasklist-id={group.id}>
+                  <h3 className={css.tasklistTitle}>
+                    <span className={css.tasklistName}>{group.name}</span>
+                    <span className={css.columnCount}>{String(group.cards.length)}</span>
+                  </h3>
+                  {renderBoard(group.columns, group.cards, columns, true)}
+                </section>
+              ))}
+              {strayColumns.length === 0 && strayCards.length === 0 ? null : (
+                <section className={css.tasklistGroup} data-dsh-part="tasklist-group" data-tasklist-id="">
+                  <h3 className={css.tasklistTitle}>
+                    <span className={css.tasklistName}>{t('board.unassignedTasklist')}</span>
+                    <span className={css.columnCount}>{String(strayCards.length)}</span>
+                  </h3>
+                  {renderBoard(strayColumns, strayCards, columns, true)}
+                </section>
+              )}
+            </div>
+          ) : (
+            renderBoard(columns, cards, columns)
+          )}
+          {cards.length === 0 ? (
+            <div className={css.stateBox} data-dsh-part="board-empty">
+              <span>{t('board.empty')}</span>
+              <span className={css.hint}>{t('board.emptyHint')}</span>
+              {tasklistId !== undefined && tasklists.length > 1 ? <span className={css.hint}>{t('board.emptyTasklistHint')}</span> : null}
+              <a className={css.link} href={projectBoardUrl(detail.project.id)} target="_blank" rel="noreferrer" data-dsh-part="open-project">
+                {t('board.openProject')}
+              </a>
+            </div>
+          ) : null}
+          {createForm}
+        </div>
+      </div>
     )
 
     body = view === 'tasks' ? renderTasks() : boardBody
@@ -1260,8 +1558,14 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
 /** Props of one rendered card. */
 interface CardProps {
   readonly card: TeambitionCardView
-  readonly status: TeambitionStatusView | undefined
-  readonly stages: readonly TeambitionStageView[]
+  /** Column (stage or workflow status) name of the card, when known. */
+  readonly statusName: string | undefined
+  /** Every column of the resolved view, for the movement select. */
+  readonly columns: readonly TeambitionColumnView[]
+  /** Column the card currently sits in; empty when it sits outside the view. */
+  readonly currentColumnId: string
+  /** Whether the view draws workflow statuses instead of kanban stages. */
+  readonly statusView: boolean
   readonly settings: TeambitionSettingsView
   readonly roster: readonly WorkspaceItemView[]
   readonly detail: TeambitionProjectDetail
@@ -1283,7 +1587,7 @@ interface CardProps {
  * @returns the card element.
  */
 function renderCard(props: CardProps): ReactElement {
-  const { card, status, stages, roster, detail, running, pending, busy, error, choice } = props
+  const { card, statusName, columns, currentColumnId, statusView, roster, detail, running, pending, busy, error, choice } = props
   const boundWorkspace = choice === undefined ? undefined : roster.find(item => item.workspaceId === choice.workspaceId)
   const chipText = choice === undefined
     ? t('board.unboundWorkspace')
@@ -1312,7 +1616,7 @@ function renderCard(props: CardProps): ReactElement {
     >
       <h4 className={css.cardTitle}>{card.title}</h4>
       <div className={css.cardMeta}>
-        {status === undefined ? null : <span className={css.badge} data-dsh-part="status">{status.name}</span>}
+        {statusName === undefined ? null : <span className={css.badge} data-dsh-part="status">{statusName}</span>}
         <span
           className={`${css.chip} ${choice === undefined ? css.chipUnbound : css.chipOn}`}
           title={chipTitle}
@@ -1359,17 +1663,23 @@ function renderCard(props: CardProps): ReactElement {
         </select>
       </label>
 
-      {stages.length === 0 ? null : (
+      {columns.length === 0 ? null : (
         <label className={css.field}>
-          <span className={css.fieldLabel}>{t('board.moveStage')}</span>
+          <span className={css.fieldLabel}>{statusView ? t('board.status') : t('board.moveStage')}</span>
           <select
             className={css.tableSelect}
-            value={card.stageId ?? ''}
+            data-dsh-part="card-move"
+            value={currentColumnId}
             disabled={busy || pending}
-            onChange={event => { props.onStage(event.target.value) }}
+            onChange={event => {
+              const column = columns.find(candidate => candidate.id === event.target.value)
+              if (column === undefined) return
+              if (column.kind === 'status') props.onStatus(column.id)
+              else props.onStage(column.id)
+            }}
           >
             <option value="">{t('board.unassignedColumn')}</option>
-            {stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+            {columns.map(column => <option key={column.id} value={column.id}>{column.name}</option>)}
           </select>
         </label>
       )}

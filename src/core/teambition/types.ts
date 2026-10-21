@@ -132,6 +132,8 @@ export interface TeambitionTask {
   readonly executorName?: string
   /** Executor avatar URL, when the API inlined the member object. */
   readonly executorAvatarUrl?: string
+  /** Creator user id (`_creatorId`); saved views can filter on it. */
+  readonly creatorId?: string
   /** Due date as returned (`dueDate`, ISO string), kept verbatim. */
   readonly dueAtRaw?: string
   /** Due date instant in ms, when parseable. */
@@ -142,6 +144,8 @@ export interface TeambitionTask {
   readonly subtaskCount?: number
   /** Comment count (`commentsCount`), when the API reports it. */
   readonly commentsCount?: number
+  /** Task type (`_scenariofieldconfigId`); workflow projects group boards by it. */
+  readonly scenarioConfigId?: string
 }
 
 /** One normalized remote project. */

@@ -163,6 +163,64 @@ export function taskCreateCandidates(): readonly TeambitionEndpoint[] {
 }
 
 /**
+ * Candidates that read a project's workflows with their ordered statuses (the
+ * columns of a workflow board). The web client calls this route when it renders
+ * a "status" view.
+ * @param projectId - remote project id.
+ */
+export function projectWorkflowCandidates(projectId: string): readonly TeambitionEndpoint[] {
+  const path = `/projects/${encodeURIComponent(projectId)}/taskflows`
+  return [
+    {
+      id: 'project-workflow-legacy-web',
+      base: 'web',
+      path,
+      purpose: 'workflows with their taskflow statuses through the www proxy',
+    },
+  ]
+}
+
+/**
+ * Candidates that read a project's task types (`scenariofieldconfig`), each
+ * bound to a workflow.
+ * @param projectId - remote project id.
+ */
+export function projectScenarioConfigCandidates(projectId: string): readonly TeambitionEndpoint[] {
+  const path = `/v2/projects/${encodeURIComponent(projectId)}/scenariofieldconfigs`
+  return [
+    {
+      id: 'project-scenario-config-web',
+      base: 'web',
+      path,
+      purpose: 'task types with their workflows through the www proxy',
+    },
+  ]
+}
+
+/**
+ * Candidates that read a project's saved views (smartgroups): the default view
+ * and the custom view list.
+ * @param projectId - remote project id.
+ */
+export function projectViewCandidates(projectId: string): readonly TeambitionEndpoint[] {
+  const encoded = encodeURIComponent(projectId)
+  return [
+    {
+      id: 'project-view-default-web',
+      base: 'web',
+      path: `/projects/${encoded}/smartgroups/default`,
+      purpose: 'the project default view through the www proxy',
+    },
+    {
+      id: 'project-view-custom-web',
+      base: 'web',
+      path: `/v2/projects/${encoded}/smartgroups`,
+      purpose: 'the saved view list through the www proxy',
+    },
+  ]
+}
+
+/**
  * Candidates that move one task between kanban stages. The legacy update route
  * takes `_stageId` on the task resource.
  * @param taskId - remote task id.

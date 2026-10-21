@@ -91,8 +91,13 @@ export interface TeambitionApiFace {
   diagnose(): Promise<TeambitionApiResult<TeambitionDiagnoseView>>
   /** Refresh the joined project list from Teambition. */
   refreshProjects(): Promise<TeambitionApiResult<TeambitionProjectsView>>
-  /** One project: stages, workflow statuses, resolved cards; one task list when given. */
-  fetchProject(projectId: string, tasklistId?: string): Promise<TeambitionApiResult<TeambitionProjectDetail>>
+  /**
+   * One project: saved views, resolved columns, workflow statuses and cards.
+   * @param projectId - Teambition project id.
+   * @param tasklistId - narrow columns and cards to one task list; absent means all.
+   * @param viewId - saved view whose columns/filters to resolve; absent means the default view.
+   */
+  fetchProject(projectId: string, tasklistId?: string, viewId?: string): Promise<TeambitionApiResult<TeambitionProjectDetail>>
   /** Create a card in a project. */
   createTask(request: TeambitionTaskCreateRequest): Promise<TeambitionApiResult<TeambitionTaskCreateView>>
   /** Move a card to another workflow status. */
@@ -121,10 +126,11 @@ export class TeambitionApi implements TeambitionApiFace {
     return post<TeambitionProjectsView>(TEAMBITION_ROUTES.projects, {})
   }
 
-  fetchProject(projectId: string, tasklistId?: string): Promise<TeambitionApiResult<TeambitionProjectDetail>> {
+  fetchProject(projectId: string, tasklistId?: string, viewId?: string): Promise<TeambitionApiResult<TeambitionProjectDetail>> {
     return post<TeambitionProjectDetail>(TEAMBITION_ROUTES.project, {
       projectId,
       ...(tasklistId === undefined ? {} : { tasklistId }),
+      ...(viewId === undefined ? {} : { viewId }),
     })
   }
 

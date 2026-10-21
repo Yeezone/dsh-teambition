@@ -106,14 +106,20 @@ export function readNextPageToken(value: unknown): string | undefined {
 
 /**
  * Read the API error code out of a response envelope.
+ *
+ * Success payloads may also carry a `name` (a saved view, a project, a task
+ * flow), so `name` only acts as an error code when the envelope also carries a
+ * human message, and a document carrying `_id` is never an error envelope.
  * @param value - parsed JSON body.
  * @returns `code` / `name` / `message` of a failure envelope, else undefined.
  */
 export function readApiError(value: unknown): { code?: string; message?: string } | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const record = value as Record<string, unknown>
-  const code = str(record.code) ?? str(record.name)
+  const explicitCode = str(record.code)
   const message = str(record.message) ?? str(record.msg)
+  if (explicitCode === undefined && (message === undefined || record._id !== undefined)) return undefined
+  const code = explicitCode ?? (message === undefined ? undefined : str(record.name))
   if (code === undefined && message === undefined) return undefined
   // A success envelope may carry `code: 200`; only non-2xx codes are errors.
   if (code !== undefined && /^2\d\d$/.test(code)) return undefined
@@ -190,11 +196,13 @@ export function readRemoteTask(raw: unknown, fallbackProjectId?: string): Teambi
   const uniqueId = num(record.uniqueId)
   const executor = readInlineMember(record.executor)
   const executorId = executor?.id ?? str(record.executorId) ?? str(record._executorId)
+  const creatorId = str(record.creatorId) ?? str(record._creatorId)
   const dueAtRaw = str(record.dueDate) ?? str(record.dueAt)
   const dueAt = parseInstant(dueAtRaw)
   const createdAt = parseInstant(str(record.created) ?? str(record.createdAt))
   const subtaskCount = num(record.subtaskCount)
   const commentsCount = num(record.commentsCount)
+  const scenarioConfigId = str(record.scenarioConfigId) ?? str(record._scenariofieldconfigId)
   return {
     id,
     projectId,
@@ -213,11 +221,13 @@ export function readRemoteTask(raw: unknown, fallbackProjectId?: string): Teambi
     ...(executorId === undefined ? {} : { executorId }),
     ...(executor?.name === undefined ? {} : { executorName: executor.name }),
     ...(executor?.avatarUrl === undefined ? {} : { executorAvatarUrl: executor.avatarUrl }),
+    ...(creatorId === undefined ? {} : { creatorId }),
     ...(dueAtRaw === undefined ? {} : { dueAtRaw }),
     ...(dueAt === undefined ? {} : { dueAt }),
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(subtaskCount === undefined ? {} : { subtaskCount }),
     ...(commentsCount === undefined ? {} : { commentsCount }),
+    ...(scenarioConfigId === undefined ? {} : { scenarioConfigId }),
   }
 }
 

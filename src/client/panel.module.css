@@ -280,6 +280,14 @@
   background: var(--dsw-alias-bg-base, transparent);
 }
 
+/* Card selects sit inside a column flex box: keep them content-sized instead
+   of inheriting the horizontal form row basis (160px), which would stretch the
+   card body. */
+.card > .field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .card[data-running='true'] {
   border-color: var(--dsw-alias-brand-primary);
 }
@@ -943,4 +951,123 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* -------------------------------------------- saved views rail + board frame */
+
+.boardFrame {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.boardArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rail {
+  display: flex;
+  flex: 0 0 168px;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  padding: 10px 8px;
+  overflow-y: auto;
+  border-right: 1px solid var(--dsw-alias-separator-primary, rgba(127, 127, 127, 0.22));
+  background: var(--dsw-alias-bg-secondary, transparent);
+}
+
+.railTitle {
+  padding: 0 6px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.railItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--dsw-alias-label-secondary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.railItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.railItemActive {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  background: var(--dsw-alias-interactive-bg-selected, rgba(127, 127, 127, 0.16));
+}
+
+.railItem:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color);
+  outline-offset: 1px;
+}
+
+.railLabel {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.railDefault {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+}
+
+/* "Gutter add": pre-selects the column in the create form from the column head. */
+.columnAdd {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.columnAdd:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.columnAdd:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (max-width: 760px) {
+  .rail {
+    flex-basis: 128px;
+  }
 }

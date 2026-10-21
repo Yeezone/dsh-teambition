@@ -15,16 +15,20 @@ import {
   resolveWorkspace,
   type TeambitionBindRequest,
   type TeambitionCardView,
+  type TeambitionColumnView,
   type TeambitionConfigRequest,
   type TeambitionDiagnoseView,
   type TeambitionProjectDetail,
   type TeambitionProjectRequest,
   type TeambitionProjectsView,
+  type TeambitionScenarioView,
   type TeambitionStageView,
   type TeambitionStateView,
   type TeambitionTaskCreateRequest,
   type TeambitionTaskStageRequest,
   type TeambitionTaskStatusRequest,
+  type TeambitionViewView,
+  type TeambitionWorkflowView,
 } from '../core/protocol.ts'
 import {
   redactMessage,
@@ -39,8 +43,11 @@ import {
   TeambitionClient,
   TeambitionApiError,
   type TeambitionClientOptions,
+  type TeambitionScenarioConfig,
   type TeambitionStage,
   type TeambitionTaskWrite,
+  type TeambitionView,
+  type TeambitionWorkflow,
 } from './client.ts'
 import type { TeambitionTransport } from './transport.ts'
 import {
@@ -100,6 +107,9 @@ export interface TeambitionClientPort {
   projectTasks(projectId: string): Promise<readonly TeambitionTask[]>
   projectStages(projectId: string): Promise<readonly TeambitionStage[]>
   projectTasklists(projectId: string): Promise<readonly TeambitionTasklist[]>
+  projectWorkflows(projectId: string): Promise<readonly TeambitionWorkflow[]>
+  projectScenarioConfigs(projectId: string): Promise<readonly TeambitionScenarioConfig[]>
+  projectViews(projectId: string): Promise<readonly TeambitionView[]>
   updateTaskStatus(taskId: string, statusId: string): Promise<void>
   updateTaskStage(taskId: string, stageId: string): Promise<void>
   createTask(input: TeambitionTaskWrite): Promise<{ taskId: string }>
@@ -225,12 +235,15 @@ export class TeambitionService {
   }
 
   /**
-   * One project with its task lists, stages, workflow statuses and resolved
-   * cards.
+   * One project with its task lists, stages, workflow statuses, saved views and
+   * resolved cards.
    *
    * Columns and cards belong to a task list, so a request that names one is
    * narrowed to it; rows the remote API leaves unattributed are treated as
-   * belonging to the only list of a single-list project.
+   * belonging to the only list of a single-list project. The board columns are
+   * resolved against the requested (or default) saved view: a "status" view
+   * renders the union of its task types' workflow statuses, a "stage" view the
+   * project's kanban columns.
    */
   async projectDetail(request: TeambitionProjectRequest): Promise<TeambitionProjectDetail> {
     const projectId = request.projectId
@@ -239,20 +252,41 @@ export class TeambitionService {
     const known = (state.projects ?? []).find(project => project.id === projectId)
     const project: TeambitionProject = known ?? { id: projectId, name: projectId }
     try {
-      const [tasklists, stages, statuses, tasks] = await Promise.all([
+      const [tasklists, stages, statuses, tasks, workflows, scenarioConfigs, views] = await Promise.all([
         client.projectTasklists(projectId),
         client.projectStages(projectId),
         client.projectStatuses(projectId),
         client.projectTasks(projectId),
+        client.projectWorkflows(projectId),
+        client.projectScenarioConfigs(projectId),
+        client.projectViews(projectId),
       ])
-      const view = settingsView(state)
+      const settings = settingsView(state)
       const stageViews = stages.map(stage => stageView(stage, tasklists))
-      const cardViews = tasks.map(task => cardView(task, project, view, tasklists))
-      const requested = request.tasklistId
-      const stagesOfList = requested === undefined ? stageViews : stageViews.filter(stage => stage.tasklistId === requested)
-      const cardsOfList = requested === undefined ? cardViews : cardViews.filter(card => card.tasklistId === requested)
+      const cardViews = tasks.map(task => cardView(task, project, settings, tasklists))
+      const requestedList = request.tasklistId
+      const stagesOfList = requestedList === undefined
+        ? stageViews
+        : stageViews.filter(stage => stage.tasklistId === requestedList)
+      const cardsOfList = requestedList === undefined
+        ? cardViews
+        : cardViews.filter(card => card.tasklistId === requestedList)
+      const selected = selectView(views, request.viewId)
+      const columns = resolveColumns(selected, workflows, scenarioConfigs, statuses, stageViews, requestedList)
+      const cardsOfView = filterCardsByView(cardsOfList, selected)
       await this.store.save({ ...state, lastSyncAt: this.now(), lastError: undefined })
-      return { project, tasklists, stages: stagesOfList, statuses, cards: cardsOfList }
+      return {
+        project,
+        tasklists,
+        stages: stagesOfList,
+        statuses,
+        views: views.map(viewViewOf),
+        workflows: workflows.map(workflowViewOf),
+        scenarioConfigs: scenarioConfigs.map(scenarioViewOf),
+        columns,
+        ...(selected === undefined ? {} : { viewId: selected.id }),
+        cards: cardsOfView,
+      }
     } catch (error) {
       const message = describe(error)
       await this.store.save({ ...state, lastError: message })
@@ -272,6 +306,7 @@ export class TeambitionService {
         ...(request.tasklistId === undefined ? {} : { tasklistId: request.tasklistId }),
         ...(request.stageId === undefined ? {} : { stageId: request.stageId }),
         ...(request.statusId === undefined ? {} : { statusId: request.statusId }),
+        ...(request.scenarioConfigId === undefined ? {} : { scenarioConfigId: request.scenarioConfigId }),
         ...(request.executorId === undefined ? {} : { executorId: request.executorId }),
       })
     } catch (error) {
@@ -382,6 +417,7 @@ function cardView(
     ...(task.stageId === undefined ? {} : { stageId: task.stageId }),
     ...(tasklistId === undefined ? {} : { tasklistId }),
     ...(task.statusId === undefined ? {} : { statusId: task.statusId }),
+    ...(task.scenarioConfigId === undefined ? {} : { scenarioConfigId: task.scenarioConfigId }),
     ...(task.isDone === undefined ? {} : { isDone: task.isDone }),
     ...(task.updatedAt === undefined ? {} : { updatedAt: task.updatedAt }),
     ...(task.priority === undefined ? {} : { priority: task.priority }),
@@ -389,6 +425,7 @@ function cardView(
     ...(task.executorId === undefined ? {} : { executorId: task.executorId }),
     ...(task.executorName === undefined ? {} : { executorName: task.executorName }),
     ...(task.executorAvatarUrl === undefined ? {} : { executorAvatarUrl: task.executorAvatarUrl }),
+    ...(task.creatorId === undefined ? {} : { creatorId: task.creatorId }),
     ...(task.dueAt === undefined ? {} : { dueAt: task.dueAt }),
     ...(task.dueAtRaw === undefined ? {} : { dueAtRaw: task.dueAtRaw }),
     ...(task.createdAt === undefined ? {} : { createdAt: task.createdAt }),
@@ -397,6 +434,158 @@ function cardView(
     ...(choice === undefined ? {} : { workspaceId: choice.workspaceId, workspaceSource: choice.source }),
     url: cardUrl(task.projectId, task.id),
   }
+}
+
+/**
+ * Pick the view columns and cards are resolved for: the requested view when the
+ * project has it, the project default otherwise, then any first view.
+ */
+function selectView(views: readonly TeambitionView[], requestedId: string | undefined): TeambitionView | undefined {
+  if (requestedId !== undefined) {
+    const requested = views.find(view => view.id === requestedId)
+    if (requested !== undefined) return requested
+  }
+  return views.find(view => view.isDefault === true) ?? views[0]
+}
+
+/** Render one saved view into the wire shape. */
+function viewViewOf(view: TeambitionView): TeambitionViewView {
+  return {
+    id: view.id,
+    name: view.name,
+    vertical: view.vertical,
+    scenarioConfigIds: view.scenarioConfigIds,
+    ...(view.filter === undefined ? {} : { filter: view.filter }),
+    ...(view.orderBy === undefined ? {} : { orderBy: view.orderBy }),
+    ...(view.isDefault === true ? { isDefault: true } : {}),
+  }
+}
+
+/** Render one workflow into the wire shape. */
+function workflowViewOf(workflow: TeambitionWorkflow): TeambitionWorkflowView {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    statuses: workflow.statuses.map(status => ({
+      id: status.id,
+      name: status.name,
+      ...(status.kind === undefined ? {} : { kind: status.kind }),
+      ...(status.pos === undefined ? {} : { pos: status.pos }),
+    })),
+  }
+}
+
+/** Render one task type into the wire shape. */
+function scenarioViewOf(config: TeambitionScenarioConfig): TeambitionScenarioView {
+  return {
+    id: config.id,
+    name: config.name,
+    ...(config.taskflowId === undefined ? {} : { taskflowId: config.taskflowId }),
+    statusIds: config.statusIds,
+  }
+}
+
+/**
+ * Resolve the board columns of the selected view.
+ *
+ * A stage view renders the project's kanban columns (narrowed to one task list
+ * when the request names one). A status view renders the union of its task
+ * types' workflow statuses, deduplicated and kept in workflow order; when its
+ * task types or workflows cannot be read it degrades to the project-wide
+ * workflow statuses instead of rendering a columnless board.
+ */
+function resolveColumns(
+  view: TeambitionView | undefined,
+  workflows: readonly TeambitionWorkflow[],
+  scenarioConfigs: readonly TeambitionScenarioConfig[],
+  statuses: readonly TeambitionWorkflowStatus[],
+  stageViews: readonly TeambitionStageView[],
+  tasklistId: string | undefined,
+): readonly TeambitionColumnView[] {
+  const stageColumns: TeambitionColumnView[] = stageViews
+    .filter(stage => tasklistId === undefined || stage.tasklistId === tasklistId)
+    .map(stage => ({
+      id: stage.id,
+      name: stage.name,
+      kind: 'stage' as const,
+      ...(stage.tasklistId === undefined ? {} : { tasklistId: stage.tasklistId }),
+      ...(stage.pos === undefined ? {} : { pos: stage.pos }),
+    }))
+  if (view === undefined || view.vertical !== 'status') return stageColumns
+  const configIds = view.scenarioConfigIds
+  const columns: TeambitionColumnView[] = []
+  const seen = new Set<string>()
+  const append = (status: TeambitionWorkflowStatus): void => {
+    if (seen.has(status.id)) return
+    seen.add(status.id)
+    columns.push({
+      id: status.id,
+      name: status.name,
+      kind: 'status',
+      ...(status.pos === undefined ? {} : { pos: status.pos }),
+    })
+  }
+  for (const configId of configIds) {
+    const config = scenarioConfigs.find(candidate => candidate.id === configId)
+    if (config === undefined) continue
+    const workflow = workflows.find(candidate => candidate.id === config.taskflowId)
+    for (const status of workflow?.statuses ?? []) append(status)
+  }
+  // A status view without task types (or whose task types the host could not
+  // read) would otherwise render a columnless board: fall back to every
+  // workflow status, which is what the web board shows for such a view.
+  if (columns.length === 0) {
+    for (const workflow of workflows) for (const status of workflow.statuses) append(status)
+  }
+  if (columns.length === 0) for (const status of statuses) append(status)
+  return columns
+}
+
+/** One equality clause of a view filter expression. */
+interface ViewFilterClause {
+  readonly field: '_executorId' | '_creatorId'
+  readonly value: string
+}
+
+/**
+ * Read the card filter of a saved view.
+ *
+ * Teambition writes expressions such as `_executorId = <userId> ORDER BY
+ * created DESC`; only the equality on `_executorId` / `_creatorId` is
+ * understood, the ordering clause is ignored (the host keeps its own order).
+ */
+function readViewFilter(filter: string | undefined): ViewFilterClause | undefined {
+  if (filter === undefined) return undefined
+  const match = /(_executorId|_creatorId)\s*=\s*([^\s]+)/.exec(filter)
+  if (match === null) return undefined
+  const field = match[1]
+  const value = match[2]
+  if ((field !== '_executorId' && field !== '_creatorId') || value === undefined) return undefined
+  return { field, value }
+}
+
+/**
+ * Apply the saved view to the card rows: an `_executorId` filter keeps the
+ * cards executed by that user, a `_creatorId` filter the cards they created,
+ * and a status view keeps only the cards of its task types.
+ */
+function filterCardsByView(
+  cards: readonly TeambitionCardView[],
+  view: TeambitionView | undefined,
+): readonly TeambitionCardView[] {
+  if (view === undefined) return cards
+  let filtered = cards
+  const clause = readViewFilter(view.filter)
+  if (clause?.field === '_executorId') {
+    filtered = filtered.filter(card => card.executorId === clause.value)
+  } else if (clause?.field === '_creatorId') {
+    filtered = filtered.filter(card => card.creatorId === clause.value)
+  }
+  if (view.vertical === 'status' && view.scenarioConfigIds.length > 0) {
+    const scenarioIds = new Set(view.scenarioConfigIds)
+    filtered = filtered.filter(card => card.scenarioConfigId !== undefined && scenarioIds.has(card.scenarioConfigId))
+  }
+  return filtered
 }
 
 /**

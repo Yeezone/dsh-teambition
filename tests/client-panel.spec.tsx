@@ -3,8 +3,9 @@
  * Panel render contract, mounted with a fake route client and fake cordis
  * service faces: no network, no host. Pins the semantic anchors the skins/L2
  * contract resolves, the user-visible board copy, the settings surface, the
- * card-run sequence (create session, retain, prompt, release, open), and the
- * task-list dimension of the board (selector, grouping, remembered selection).
+ * card-run sequence (create session, retain, prompt, release, open), the
+ * task-list dimension of the board and the saved-view / workflow-status board
+ * (view rail, resolved columns, quick add and kind-routed card moves).
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -12,11 +13,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeambitionApiFace, TeambitionApiResult } from '../src/client/api.ts'
 import type { SessionsFace, UiWorkspaceFace, WorkspacesFace } from '../src/client/faces.ts'
 import { zh } from '../src/client/locales.ts'
-import { SELECTION_STORAGE_KEY, TASK_VIEW_STORAGE_KEY, TeambitionPanel, type TeambitionPanelProps } from '../src/client/panel.tsx'
+import {
+  SELECTION_STORAGE_KEY,
+  TASK_VIEW_STORAGE_KEY,
+  VIEW_STORAGE_KEY,
+  TeambitionPanel,
+  type TeambitionPanelProps,
+} from '../src/client/panel.tsx'
 import type {
   TeambitionProjectDetail,
+  TeambitionScenarioView,
   TeambitionSettingsView,
   TeambitionStateView,
+  TeambitionStatusView,
+  TeambitionViewView,
+  TeambitionWorkflowView,
 } from '../src/core/protocol.ts'
 import type { TeambitionDiagnostics, TeambitionProject } from '../src/core/teambition/types.ts'
 
@@ -33,6 +44,18 @@ const SETTINGS: TeambitionSettingsView = {
   cardBindings: [],
 }
 
+const STATUS_START: TeambitionStatusView = { id: 'st1', name: '未开始', kind: 'start' }
+const STATUS_DOING: TeambitionStatusView = { id: 'st2', name: '进行中' }
+const STATUS_END: TeambitionStatusView = { id: 'st3', name: '已完成', kind: 'end' }
+
+const WORKFLOW: TeambitionWorkflowView = { id: 'wf1', name: '默认工作流', statuses: [STATUS_START, STATUS_DOING, STATUS_END] }
+const SCENARIO: TeambitionScenarioView = { id: 'sc1', name: '任务', taskflowId: 'wf1', statusIds: ['st1', 'st2', 'st3'] }
+
+/** The project's default (stage) saved view. */
+const VIEW_STAGE: TeambitionViewView = { id: 'v-stage', name: '迭代看板', vertical: 'stage', scenarioConfigIds: [], isDefault: true }
+/** A workflow (status) saved view: its columns are workflow statuses. */
+const VIEW_STATUS: TeambitionViewView = { id: 'v-status', name: '任务状态', vertical: 'status', scenarioConfigIds: ['sc1'] }
+
 const DETAIL: TeambitionProjectDetail = {
   project: PROJECT,
   tasklists: [{ id: 'l1', name: '迭代一' }],
@@ -40,11 +63,15 @@ const DETAIL: TeambitionProjectDetail = {
     { id: 's1', name: '待办', tasklistId: 'l1' },
     { id: 's2', name: '进行中', tasklistId: 'l1' },
   ],
-  statuses: [
-    { id: 'st1', name: '未开始', kind: 'start' },
-    { id: 'st2', name: '进行中' },
-    { id: 'st3', name: '已完成', kind: 'end' },
+  statuses: [STATUS_START, STATUS_DOING, STATUS_END],
+  views: [VIEW_STAGE],
+  workflows: [WORKFLOW],
+  scenarioConfigs: [],
+  columns: [
+    { id: 's1', name: '待办', kind: 'stage', tasklistId: 'l1' },
+    { id: 's2', name: '进行中', kind: 'stage', tasklistId: 'l1' },
   ],
+  viewId: VIEW_STAGE.id,
   cards: [{
     id: 't1',
     projectId: 'p1',
@@ -77,6 +104,11 @@ const DETAIL_ALL: TeambitionProjectDetail = {
     { id: 's2', name: '进行中', tasklistId: 'l1' },
     { id: 's3', name: '待办', tasklistId: 'l2' },
   ],
+  columns: [
+    { id: 's1', name: '待办', kind: 'stage', tasklistId: 'l1' },
+    { id: 's2', name: '进行中', kind: 'stage', tasklistId: 'l1' },
+    { id: 's3', name: '待办', kind: 'stage', tasklistId: 'l2' },
+  ],
   cards: [
     DETAIL.cards[0],
     {
@@ -94,11 +126,30 @@ const DETAIL_ALL: TeambitionProjectDetail = {
   ],
 }
 
-/** The payload of one task list, as the host filters it. */
+/** The payload of one task list, as the host filters it (columns follow suit). */
 const DETAIL_L2: TeambitionProjectDetail = {
   ...DETAIL_ALL,
   stages: DETAIL_ALL.stages.filter(stage => stage.tasklistId === 'l2'),
+  columns: DETAIL_ALL.columns.filter(column => column.tasklistId === 'l2'),
   cards: DETAIL_ALL.cards.filter(card => card.tasklistId === 'l2'),
+}
+
+/**
+ * A project with a stage view and a workflow-status view: `columns` are the
+ * statuses of the workflow, the cards carry a scenario (task type) id.
+ */
+const DETAIL_STATUS: TeambitionProjectDetail = {
+  ...DETAIL,
+  views: [VIEW_STAGE, VIEW_STATUS],
+  workflows: [WORKFLOW],
+  scenarioConfigs: [SCENARIO],
+  columns: [
+    { id: 'st1', name: '未开始', kind: 'status' },
+    { id: 'st2', name: '进行中', kind: 'status' },
+    { id: 'st3', name: '已完成', kind: 'status' },
+  ],
+  viewId: VIEW_STATUS.id,
+  cards: [{ ...DETAIL.cards[0], scenarioConfigId: SCENARIO.id }],
 }
 
 /**
@@ -139,6 +190,13 @@ const DETAIL_TASKS: TeambitionProjectDetail = {
   ],
 }
 
+/** The task-module payload of a workflow project: t1 carries the task type. */
+const DETAIL_TASKS_SCENARIO: TeambitionProjectDetail = {
+  ...DETAIL_TASKS,
+  scenarioConfigs: [SCENARIO],
+  cards: DETAIL_TASKS.cards.map(card => card.id === 't1' ? { ...card, scenarioConfigId: SCENARIO.id } : card),
+}
+
 const DIAGNOSTICS: TeambitionDiagnostics = {
   probedAt: Date.parse('2026-10-21T05:00:00Z'),
   cookieConfigured: true,
@@ -167,7 +225,7 @@ function harness(state: TeambitionStateView = stateView(), detail: TeambitionPro
   const setTaskStatus = vi.fn(async (_request: unknown) => ok<Record<string, never>>({}))
   const setTaskStage = vi.fn(async (_request: unknown) => ok<Record<string, never>>({}))
   const saveBindings = vi.fn(async (_request: unknown) => ok(stateView()))
-  const fetchProject = vi.fn(async (_projectId: string, _tasklistId?: string) => ok(detail))
+  const fetchProject = vi.fn(async (_projectId: string, _tasklistId?: string, _viewId?: string) => ok(detail))
   const api: TeambitionApiFace = {
     fetchState: vi.fn(async () => ok(state)),
     saveConfig: vi.fn(async () => ok(state)),
@@ -274,8 +332,18 @@ function parsedTaskView(): Record<string, unknown> {
   return JSON.parse(localStorage.getItem(TASK_VIEW_STORAGE_KEY) ?? '{}') as Record<string, unknown>
 }
 
+/** The persisted per-project saved views. */
+function parsedViews(): Record<string, string> {
+  return JSON.parse(localStorage.getItem(VIEW_STORAGE_KEY) ?? '{}') as Record<string, string>
+}
+
+/** The board columns, in board order. */
+function boardColumns(scope: ParentNode): HTMLElement[] {
+  return [...scope.querySelectorAll('[data-dsh-part="column"]')] as HTMLElement[]
+}
+
 describe('TeambitionPanel', () => {
-  it('renders the board with the project columns, cards and workspace chips', async () => {
+  it('renders the board with the resolved columns, cards and workspace chips', async () => {
     const h = harness()
     const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
 
@@ -286,9 +354,13 @@ describe('TeambitionPanel', () => {
     expect(container.querySelector('[data-dsh-part="connection"]')?.textContent).toBe(zh['connection.ok'])
     expect(container.querySelector('[data-dsh-part="connection"]')?.getAttribute('data-connected')).toBe('true')
 
-    const columns = [...container.querySelectorAll('[data-dsh-part="column"]')]
+    // The board draws `detail.columns`, in host order, with their kind.
+    const columns = boardColumns(container)
     expect(columns).toHaveLength(2)
-    expect(columns[0].textContent).toContain('待办')
+    expect(columns.map(column => column.getAttribute('data-column-id'))).toEqual(['s1', 's2'])
+    expect(columns.map(column => column.getAttribute('data-column-kind'))).toEqual(['stage', 'stage'])
+    expect(columns[0].querySelector('[data-dsh-part="column-head"]')?.textContent).toContain('待办')
+    expect(columns[0].querySelector('[data-dsh-part="column-head"]')?.textContent).toContain('1')
     expect(columns[0].querySelector('[data-dsh-part="card"]')).not.toBeNull()
     expect(columns[1].querySelector('[data-dsh-part="card"]')).toBeNull()
 
@@ -304,6 +376,8 @@ describe('TeambitionPanel', () => {
     // A project with one task list shows it read-only, without a picker.
     expect(container.querySelector('[data-dsh-part="tasklist"]')?.textContent).toContain('迭代一')
     expect(container.querySelector('[data-dsh-part="tasklist-picker"]')).toBeNull()
+    // Every column head offers the quick-add button.
+    expect(columns.every(column => column.querySelector('[data-dsh-part="column-add"]') !== null)).toBe(true)
   })
 
   it('marks a card without an execution workspace as unbound', async () => {
@@ -395,6 +469,162 @@ describe('TeambitionPanel', () => {
   })
 })
 
+describe('TeambitionPanel saved views', () => {
+  it('draws the workflow status columns of a status view and marks it default', async () => {
+    const h = harness(stateView(), DETAIL_STATUS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical') === 'status', 'the status board')
+
+    const columns = boardColumns(container)
+    expect(columns.map(column => column.getAttribute('data-column-id'))).toEqual(['st1', 'st2', 'st3'])
+    expect(columns.map(column => column.getAttribute('data-column-kind'))).toEqual(['status', 'status', 'status'])
+    // t1 has statusId st2: it sits in the "进行中" column, badged with that name.
+    expect(columns[1].querySelector('[data-dsh-part="card"]')).not.toBeNull()
+    expect(container.querySelector('[data-dsh-part="card"] [data-dsh-part="status"]')?.textContent).toBe('进行中')
+
+    // The rail lists both saved views, the resolved one is current and default.
+    const rail = container.querySelector('[data-dsh-part="view-rail"]') as HTMLElement
+    expect(rail).not.toBeNull()
+    const items = [...rail.querySelectorAll('[data-dsh-part="view-item"]')] as HTMLElement[]
+    expect(items.map(item => item.getAttribute('data-view-id'))).toEqual(['v-stage', 'v-status'])
+    const active = items.find(item => item.getAttribute('data-view-id') === 'v-status')
+    expect(active?.getAttribute('aria-current')).toBe('true')
+    expect(active?.getAttribute('data-default')).toBe('true')
+  })
+
+  it('reloads the project with the view picked in the rail and remembers it', async () => {
+    const h = harness(stateView(), DETAIL_STATUS)
+    const fetchProject = vi.fn(async (_projectId: string, _tasklistId?: string, viewId?: string) =>
+      ok(viewId === 'v-stage' ? DETAIL : DETAIL_STATUS))
+    h.api.fetchProject = fetchProject
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="view-rail"]') !== null, 'the view rail')
+
+    expect(fetchProject).toHaveBeenCalledWith('p1', undefined, undefined)
+
+    const stageItem = container.querySelector('[data-dsh-part="view-item"][data-view-id="v-stage"]') as HTMLButtonElement
+    expect(stageItem).not.toBeNull()
+    await click(stageItem)
+
+    await until(() => container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical') === 'stage', 'the stage board')
+    expect(fetchProject).toHaveBeenCalledWith('p1', undefined, 'v-stage')
+    expect(container.querySelector('[data-dsh-part="view-item"][data-view-id="v-stage"]')?.getAttribute('aria-current')).toBe('true')
+    expect(boardColumns(container).map(column => column.getAttribute('data-column-id'))).toEqual(['s1', 's2'])
+    expect(parsedViews()).toEqual({ p1: 'v-stage' })
+  })
+
+  it('restores the remembered view of the project on mount', async () => {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ p1: 'v-status' }))
+    const h = harness(stateView(), DETAIL_STATUS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+
+    await until(() => h.fetchProject.mock.calls.some(call => call[2] === 'v-status'), 'the remembered view read')
+    await until(() => container.querySelector('[data-dsh-part="view-item"][data-view-id="v-status"]')?.getAttribute('aria-current') === 'true', 'the active view item')
+    expect(container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical')).toBe('status')
+  })
+
+  it('falls back to the default view when the remembered view no longer exists', async () => {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ p1: 'v-gone' }))
+    const h = harness(stateView(), DETAIL)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+
+    await until(() => parsedViews().p1 === undefined, 'the stale view to be forgotten')
+    await until(
+      () => h.fetchProject.mock.calls.some(call => call[0] === 'p1' && call[2] === undefined && call.length >= 3),
+      'the default view read',
+    )
+    expect(container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical')).toBe('stage')
+  })
+})
+
+describe('TeambitionPanel quick add and moves', () => {
+  it('quick-adds a card into the clicked stage column', async () => {
+    const h = harness()
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="column"]') !== null, 'the board columns')
+
+    const add = container.querySelector('[data-dsh-part="column"][data-column-id="s2"] [data-dsh-part="column-add"]') as HTMLButtonElement
+    expect(add).not.toBeNull()
+    await click(add)
+
+    // The form picks the clicked column and its title input is focused.
+    const form = container.querySelector('[data-dsh-part="create"]') as HTMLFormElement
+    expect((form.querySelector('select') as HTMLSelectElement).value).toBe('s2')
+    expect(document.activeElement).toBe(form.querySelector('input'))
+
+    await act(async () => { typeInto(form.querySelector('input') as HTMLInputElement, '灰度发布') })
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await until(() => h.createTask.mock.calls.length > 0, 'the create call')
+
+    expect(h.createTask.mock.calls[0][0]).toEqual({
+      projectId: 'p1',
+      title: '灰度发布',
+      tasklistId: 'l1',
+      stageId: 's2',
+    })
+  })
+
+  it('quick-adds a card into a status column with its task type', async () => {
+    const h = harness(stateView(), DETAIL_STATUS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical') === 'status', 'the status board')
+
+    // Status columns are offered, but only a START status is selectable.
+    const createSelect = container.querySelector('[data-dsh-part="create"] [data-dsh-part="create-column"]') as HTMLSelectElement
+    expect(createSelect).not.toBeNull()
+    const options = [...createSelect.options]
+    expect(options.map(option => option.value)).toEqual(['', 'st1', 'st2', 'st3'])
+    expect(options.find(option => option.value === 'st1')?.disabled).toBe(false)
+    expect(options.find(option => option.value === 'st2')?.disabled).toBe(true)
+    expect(options.find(option => option.value === 'st3')?.disabled).toBe(true)
+
+    await click(container.querySelector('[data-dsh-part="column"][data-column-id="st1"] [data-dsh-part="column-add"]') as HTMLButtonElement)
+    expect(createSelect.value).toBe('st1')
+
+    const form = container.querySelector('[data-dsh-part="create"]') as HTMLFormElement
+    await act(async () => { typeInto(form.querySelector('input') as HTMLInputElement, '梳理需求') })
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await until(() => h.createTask.mock.calls.length > 0, 'the create call')
+
+    expect(h.createTask.mock.calls[0][0]).toEqual({
+      projectId: 'p1',
+      title: '梳理需求',
+      statusId: 'st1',
+      scenarioConfigId: 'sc1',
+    })
+  })
+
+  it('routes a card move by the kind of the chosen column', async () => {
+    const h = harness()
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card-move"]') !== null, 'the card move select')
+
+    // t1 sits in s1 (stage column): moving to s2 calls the stage route.
+    const move = container.querySelector('[data-dsh-part="card"] [data-dsh-part="card-move"]') as HTMLSelectElement
+    expect(move.value).toBe('s1')
+    expect([...move.options].map(option => option.value)).toEqual(['', 's1', 's2'])
+    await act(async () => { pickOption(move, 's2') })
+    await until(() => h.setTaskStage.mock.calls.length > 0, 'the stage move')
+
+    expect(h.setTaskStage.mock.calls[0][0]).toEqual({ taskId: 't1', stageId: 's2' })
+    expect(h.setTaskStatus).not.toHaveBeenCalled()
+  })
+
+  it('moves a card to a status column through the workflow route', async () => {
+    const h = harness(stateView(), DETAIL_STATUS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card-move"]') !== null, 'the card move select')
+
+    const move = container.querySelector('[data-dsh-part="card"] [data-dsh-part="card-move"]') as HTMLSelectElement
+    expect(move.value).toBe('st2')
+    await act(async () => { pickOption(move, 'st3') })
+    await until(() => h.setTaskStatus.mock.calls.length > 0, 'the status move')
+
+    expect(h.setTaskStatus.mock.calls[0][0]).toEqual({ taskId: 't1', statusId: 'st3' })
+    expect(h.setTaskStage).not.toHaveBeenCalled()
+  })
+})
+
 describe('TeambitionPanel task lists', () => {
   it('groups the all-lists board by task list and offers every list in the picker', async () => {
     const h = harness(stateView(), DETAIL_ALL)
@@ -402,7 +632,7 @@ describe('TeambitionPanel task lists', () => {
     await until(() => container.querySelector('[data-dsh-part="tasklist-group"]') !== null, 'the task list groups')
 
     // "All task lists" is the default: every list gets its own board.
-    expect(h.fetchProject).toHaveBeenCalledWith('p1', undefined)
+    expect(h.fetchProject).toHaveBeenCalledWith('p1', undefined, undefined)
 
     const groups = [...container.querySelectorAll('[data-dsh-part="tasklist-group"]')]
     expect(groups).toHaveLength(2)
@@ -432,7 +662,7 @@ describe('TeambitionPanel task lists', () => {
     await until(() => container.querySelector('[data-dsh-part="tasklist-picker"]') !== null, 'the task list picker')
 
     await act(async () => { pickOption(tasklistPicker(container), 'l2') })
-    expect(h.fetchProject).toHaveBeenLastCalledWith('p1', 'l2')
+    expect(h.fetchProject).toHaveBeenLastCalledWith('p1', 'l2', undefined)
 
     await until(
       () => JSON.parse(localStorage.getItem(SELECTION_STORAGE_KEY) ?? '{}').tasklistId === 'l2',
@@ -447,7 +677,7 @@ describe('TeambitionPanel task lists', () => {
     const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
 
     await until(() => h.fetchProject.mock.calls.some(call => call[1] === 'l2'), 'the task-list read')
-    expect(h.fetchProject).toHaveBeenCalledWith('p1', 'l2')
+    expect(h.fetchProject).toHaveBeenCalledWith('p1', 'l2', undefined)
     expect(tasklistPicker(container).value).toBe('l2')
   })
 
@@ -460,7 +690,7 @@ describe('TeambitionPanel task lists', () => {
       const picker = tasklistPicker(container)
       return picker !== null && picker.value === ''
     }, 'the fallback to all task lists')
-    expect(h.fetchProject).toHaveBeenLastCalledWith('p1', undefined)
+    expect(h.fetchProject).toHaveBeenLastCalledWith('p1', undefined, undefined)
     expect(JSON.parse(localStorage.getItem(SELECTION_STORAGE_KEY) ?? '{}')).toEqual({ projectId: 'p1' })
   })
 
@@ -628,6 +858,18 @@ describe('TeambitionPanel task module', () => {
 
     await click(buttonByText(drawer, zh['detail.close']) as HTMLButtonElement)
     expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+  })
+
+  it('shows the task type of a workflow card in the drawer facts', async () => {
+    const { container } = await mountTasks(DETAIL_TASKS_SCENARIO)
+    const legacy = rows(container)[2]
+    await act(async () => { legacy.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    const drawer = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    expect(drawer.textContent).toContain(zh['board.scenario'])
+    expect(drawer.textContent).toContain(SCENARIO.name)
+    // The drawer also names the column the card sits in (stage view: the stage).
+    expect(drawer.textContent).toContain('待办')
   })
 
   it('remembers the task view settings for the next visit', async () => {

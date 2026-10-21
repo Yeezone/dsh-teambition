@@ -106,6 +106,49 @@ export interface TeambitionStatusView {
   readonly pos?: number
 }
 
+/** One workflow of a project, with its ordered statuses. */
+export interface TeambitionWorkflowView {
+  readonly id: string
+  readonly name: string
+  readonly statuses: readonly TeambitionStatusView[]
+}
+
+/** One task type (`scenariofieldconfig`) bound to a workflow. */
+export interface TeambitionScenarioView {
+  readonly id: string
+  readonly name: string
+  readonly taskflowId?: string
+  /** Statuses of the bound workflow, in board order. */
+  readonly statusIds: readonly string[]
+}
+
+/**
+ * One saved view of a project, i.e. a Teambition smartgroup. `vertical` says what
+ * the board columns are: stages (plain task lists) or workflow statuses.
+ */
+export interface TeambitionViewView {
+  readonly id: string
+  readonly name: string
+  readonly vertical: 'stage' | 'status' | 'unknown'
+  /** Task types whose workflows supply the columns, for status views. */
+  readonly scenarioConfigIds: readonly string[]
+  /** Remote filter expression, e.g. `_executorId = <id>`. */
+  readonly filter?: string
+  readonly orderBy?: string
+  /** The project's default view. */
+  readonly isDefault?: boolean
+}
+
+/** One board column, already resolved for the selected view. */
+export interface TeambitionColumnView {
+  readonly id: string
+  readonly name: string
+  readonly kind: 'stage' | 'status'
+  /** Task list owning the column, when it is a stage. */
+  readonly tasklistId?: string
+  readonly pos?: number
+}
+
 /** One card rendered by the panel, already resolved against the bindings. */
 export interface TeambitionCardView {
   readonly id: string
@@ -119,6 +162,8 @@ export interface TeambitionCardView {
   readonly tasklistId?: string
   /** Workflow status id. */
   readonly statusId?: string
+  /** Task type (`scenariofieldconfig`) id; workflow projects render these as views. */
+  readonly scenarioConfigId?: string
   readonly isDone?: boolean
   /** Remote `updated` instant in ms. */
   readonly updatedAt?: number
@@ -131,6 +176,8 @@ export interface TeambitionCardView {
   readonly executorName?: string
   /** Executor avatar URL. */
   readonly executorAvatarUrl?: string
+  /** Creator user id; saved "created by me" views filter on it. */
+  readonly creatorId?: string
   /** Due date instant in ms (the task module renders overdue states from it). */
   readonly dueAt?: number
   /** Due date as returned by the API (ISO string). */
@@ -156,6 +203,14 @@ export interface TeambitionProjectDetail {
   readonly tasklists: readonly TeambitionTasklistView[]
   readonly stages: readonly TeambitionStageView[]
   readonly statuses: readonly TeambitionStatusView[]
+  /** Saved views of the project, in the order the web board lists them. */
+  readonly views: readonly TeambitionViewView[]
+  readonly workflows: readonly TeambitionWorkflowView[]
+  readonly scenarioConfigs: readonly TeambitionScenarioView[]
+  /** Columns of the selected view, in board order. */
+  readonly columns: readonly TeambitionColumnView[]
+  /** The view these columns/cards were resolved for. */
+  readonly viewId?: string
   readonly cards: readonly TeambitionCardView[]
 }
 
@@ -202,6 +257,8 @@ export interface TeambitionProjectRequest {
   readonly projectId: string
   /** Restrict columns and cards to one task list; absent means every list. */
   readonly tasklistId?: string
+  /** Saved view to resolve columns and filters for; absent means the default view. */
+  readonly viewId?: string
 }
 
 /** `teambition/task/create` request. */
@@ -215,6 +272,8 @@ export interface TeambitionTaskCreateRequest {
   readonly stageId?: string
   /** Workflow status id; the project's start status when omitted. */
   readonly statusId?: string
+  /** Task type (`scenariofieldconfig`) id; required for workflow status creates. */
+  readonly scenarioConfigId?: string
   /** Teambition executor id. */
   readonly executorId?: string
 }

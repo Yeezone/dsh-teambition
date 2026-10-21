@@ -19,16 +19,20 @@ import {
   endpointUrl,
   endpointWithQuery,
   isInvalidCookieError,
+  projectScenarioConfigCandidates,
   projectStageCandidates,
   projectStatusCandidates,
   projectTaskCandidates,
   projectTasklistCandidates,
+  projectViewCandidates,
+  projectWorkflowCandidates,
   PROJECT_LIST_CANDIDATES,
   readApiError,
   readCollection,
   readNextPageToken,
   readProjects,
   readTasks,
+  readWorkflowStatus,
   readWorkflowStatuses,
   redactMessage,
   redactPreview,
@@ -87,6 +91,48 @@ export interface TeambitionStage {
   readonly pos?: number
 }
 
+/** One workflow of a project, with its ordered statuses. */
+export interface TeambitionWorkflow {
+  /** Remote workflow (`taskflow`) id. */
+  readonly id: string
+  /** Workflow name. */
+  readonly name: string
+  /** Statuses of the workflow, in board order. */
+  readonly statuses: readonly TeambitionWorkflowStatus[]
+}
+
+/** One task type (`scenariofieldconfig`) bound to a workflow. */
+export interface TeambitionScenarioConfig {
+  /** Remote scenario-config id (a card's `scenarioConfigId` points here). */
+  readonly id: string
+  /** Task-type name. */
+  readonly name: string
+  /** Workflow whose statuses are this task type's columns. */
+  readonly taskflowId?: string
+  /** Status ids of the bound workflow, in board order. */
+  readonly statusIds: readonly string[]
+}
+
+/**
+ * One saved view of a project (a Teambition `smartgroup`). `vertical` says what
+ * the board columns are: plain task-list stages or workflow statuses.
+ */
+export interface TeambitionView {
+  /** Remote smartgroup id. */
+  readonly id: string
+  /** View name. */
+  readonly name: string
+  readonly vertical: 'stage' | 'status' | 'unknown'
+  /** Task types whose workflows supply the columns of a status view. */
+  readonly scenarioConfigIds: readonly string[]
+  /** Remote filter expression, e.g. `_executorId = <id>`. */
+  readonly filter?: string
+  /** Remote sort expression. */
+  readonly orderBy?: string
+  /** Whether this is the project default view. */
+  readonly isDefault?: boolean
+}
+
 /** One task creation request as the write route takes it. */
 export interface TeambitionTaskWrite {
   /** Owning project id. */
@@ -101,6 +147,8 @@ export interface TeambitionTaskWrite {
   readonly stageId?: string
   /** Workflow status id, sent as `taskflowstatusId`. */
   readonly statusId?: string
+  /** Task type (`scenariofieldconfig`) id; required for workflow status creates. */
+  readonly scenarioConfigId?: string
   /** Teambition executor id. */
   readonly executorId?: string
 }
@@ -194,7 +242,10 @@ export class TeambitionClient {
         json = undefined
       }
     }
-    const apiError = readApiError(json)
+    // A successful route may answer a single resource object that carries a
+    // `name` (the project default view is `{ _id, name }`); `readApiError`
+    // reads `name` as a fallback error code, so resources are exempted.
+    const apiError = looksLikeResource(json) ? undefined : readApiError(json)
     if (response.status === 401 || isInvalidCookieError(apiError?.code, response.status)) {
       throw new TeambitionApiError(
         'invalid-cookie',
@@ -444,15 +495,112 @@ export class TeambitionClient {
   }
 
   /**
+   * Read one project's workflows with their ordered statuses.
+   *
+   * A project may legitimately have no workflows (simple projects are organized
+   * by stages), so an exhausted candidate list yields an empty collection. The
+   * route is only partially verified, hence the same tolerant treatment.
+   * @param projectId - remote project id.
+   * @returns workflows (empty when the project has none).
+   */
+  async projectWorkflows(projectId: string): Promise<readonly TeambitionWorkflow[]> {
+    for (const endpoint of this.ordered(projectWorkflowCandidates(projectId))) {
+      try {
+        const response = await this.send(endpointWithQuery(endpoint, { withTaskflowstatus: true, type: 'task' }), 'GET')
+        return readWorkflows(response.json)
+      } catch (error) {
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    return []
+  }
+
+  /**
+   * Read one project's task types (`scenariofieldconfig`), each bound to a
+   * workflow.
+   *
+   * Their workflow statuses are the columns of a "status" board view, so a
+   * missing route degrades to an empty collection instead of failing the panel.
+   * @param projectId - remote project id.
+   * @returns task types (empty when the project has none).
+   */
+  async projectScenarioConfigs(projectId: string): Promise<readonly TeambitionScenarioConfig[]> {
+    for (const endpoint of this.ordered(projectScenarioConfigCandidates(projectId))) {
+      try {
+        const response = await this.send(
+          endpointWithQuery(endpoint, { objectType: 'task', withTaskflowstatus: true, withCustomfields: true }),
+          'GET',
+        )
+        return readScenarioConfigs(response.json)
+      } catch (error) {
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    return []
+  }
+
+  /**
+   * Read one project's saved views (`smartgroup`): the default view first, then
+   * the custom view list, deduplicated by id.
+   *
+   * The default route may answer with a single object instead of a collection,
+   * so both shapes are read. A project without views (or an unanswered route)
+   * yields an empty collection.
+   * @param projectId - remote project id.
+   * @returns views with the default one first.
+   */
+  async projectViews(projectId: string): Promise<readonly TeambitionView[]> {
+    const views = new Map<string, TeambitionView>()
+    const push = (view: TeambitionView | undefined): void => {
+      if (view === undefined) return
+      const existing = views.get(view.id)
+      if (existing === undefined) {
+        views.set(view.id, view)
+        return
+      }
+      // The default route only names the view, while the custom list carries
+      // its columns: keep the entry that knows more about the same id.
+      views.set(view.id, mergedView(existing, view))
+    }
+    for (const endpoint of this.ordered(projectViewCandidates(projectId))) {
+      try {
+        const isDefaultRoute = endpoint.id === 'project-view-default-web'
+        const url = isDefaultRoute
+          ? endpointWithQuery(endpoint, { type: 'tasks' })
+          : endpointWithQuery(endpoint, { pageSize: 200, type: 'custom', labels: 'common', withGlobal: true })
+        const response = await this.send(url, 'GET')
+        if (isDefaultRoute) {
+          const single = readSingleObject(response.json)
+          push(single === undefined ? undefined : readView(single, true))
+          continue
+        }
+        for (const view of readViews(response.json)) push(view)
+      } catch (error) {
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      }
+    }
+    // The web board lists the default view first; keep that order.
+    return [...views.values()].sort(
+      (left, right) => Number(right.isDefault === true) - Number(left.isDefault === true),
+    )
+  }
+
+  /**
    * Create one task.
    * @param input - title, project and optional task list/stage/status/executor.
    * @returns the created task id and the endpoint that accepted it.
    */
   async createTask(input: TeambitionTaskWrite): Promise<{ taskId: string; endpoint: TeambitionEndpoint }> {
+    // Creating into a workflow status needs the task type; a project with a
+    // single task type has it inferred before choosing a route, so a project
+    // with several fails with one clear message instead of one per endpoint.
+    const write = input.statusId === undefined || input.scenarioConfigId !== undefined
+      ? input
+      : { ...input, scenarioConfigId: await this.defaultScenarioConfigId(input.projectId, input.statusId) }
     const failures: string[] = []
     for (const endpoint of this.ordered(taskCreateCandidates())) {
       try {
-        const body = JSON.stringify(await this.createBodyFor(endpoint, input))
+        const body = JSON.stringify(await this.createBodyFor(endpoint, write))
         const response = await this.send(endpointUrl(endpoint), 'POST', body)
         const taskId = readCreatedTaskId(response.json)
         if (taskId === undefined) {
@@ -473,7 +621,9 @@ export class TeambitionClient {
    * The v3 route takes camelCase fields; the legacy collection route the web
    * client uses takes underscore fields and requires a `_tasklistId`, so the
    * selected task list is used when given and the project's first task list is
-   * fetched on demand otherwise.
+   * fetched on demand otherwise. Creating into a workflow status needs the task
+   * type (`scenarioConfigId`), resolved by `createTask` before a route is
+   * chosen.
    */
   private async createBodyFor(endpoint: TeambitionEndpoint, input: TeambitionTaskWrite): Promise<Record<string, string>> {
     if (!isLegacyTaskRoute(endpoint)) {
@@ -484,6 +634,7 @@ export class TeambitionClient {
         ...(input.note === undefined ? {} : { note: input.note }),
         ...(input.stageId === undefined ? {} : { stageId: input.stageId }),
         ...(input.statusId === undefined ? {} : { taskflowstatusId: input.statusId }),
+        ...(input.scenarioConfigId === undefined ? {} : { scenarioConfigId: input.scenarioConfigId }),
         ...(input.executorId === undefined ? {} : { executorId: input.executorId }),
       }
     }
@@ -497,7 +648,38 @@ export class TeambitionClient {
       content: input.title,
       ...(input.note === undefined ? {} : { note: input.note }),
       ...(input.stageId === undefined ? {} : { _stageId: input.stageId }),
+      ...(input.statusId === undefined ? {} : { _taskflowstatusId: input.statusId }),
+      ...(input.scenarioConfigId === undefined ? {} : { _scenariofieldconfigId: input.scenarioConfigId }),
     }
+  }
+
+  /**
+   * Resolve the task type a card created into a workflow status belongs to.
+   *
+   * Each task type binds one workflow, so the status the card starts in usually
+   * names its type unambiguously; a project with a single task type always
+   * resolves, and anything ambiguous asks the caller for the type instead of
+   * silently landing the card on the first one.
+   * @param projectId - remote project id.
+   * @param statusId - workflow status the card is created in, when known.
+   */
+  private async defaultScenarioConfigId(projectId: string, statusId?: string): Promise<string | undefined> {
+    const configs = await this.projectScenarioConfigs(projectId)
+    if (statusId !== undefined && configs.length > 0) {
+      const workflows = await this.projectWorkflows(projectId)
+      const matches = configs.filter(config => {
+        const workflow = workflows.find(candidate => candidate.id === config.taskflowId)
+        return (workflow?.statuses ?? []).some(status => status.id === statusId)
+      })
+      if (matches.length === 1) return matches[0]?.id
+      if (matches.length > 1) {
+        throw new TeambitionApiError('api', `status ${statusId} belongs to ${matches.length} task types, so creating into it needs an explicit scenarioConfigId`)
+      }
+    }
+    if (configs.length > 1) {
+      throw new TeambitionApiError('api', `project ${projectId} has ${configs.length} task types, so creating into a workflow status needs an explicit scenarioConfigId`)
+    }
+    return configs[0]?.id
   }
 
   /** Read the id of the first task list of a project, if it has one. */
@@ -597,6 +779,182 @@ function readTasklists(payload: unknown): readonly TeambitionTasklist[] {
     tasklists.push({ id, name })
   }
   return tasklists
+}
+
+/** Read the workflows out of a workflow payload. */
+function readWorkflows(payload: unknown): readonly TeambitionWorkflow[] {
+  const collection = readCollection(payload)
+  if (collection === undefined) return []
+  const workflows: TeambitionWorkflow[] = []
+  const seen = new Set<string>()
+  for (const raw of collection) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const record = raw as Record<string, unknown>
+    const id = stringOf(record.id) ?? stringOf(record._id) ?? stringOf(record.taskflowId)
+    if (id === undefined || seen.has(id)) continue
+    const name = collapseWhitespace(stringOf(record.name) ?? stringOf(record.title) ?? id)
+    const statuses = readWorkflowStatuses(record.statuses ?? record.taskflowstatuses ?? record.status)
+    seen.add(id)
+    workflows.push({ id, name, statuses })
+  }
+  return workflows
+}
+
+/** Read the task types (`scenariofieldconfig`) out of a payload. */
+function readScenarioConfigs(payload: unknown): readonly TeambitionScenarioConfig[] {
+  const collection = readCollection(payload)
+  if (collection === undefined) return []
+  const configs: TeambitionScenarioConfig[] = []
+  const seen = new Set<string>()
+  for (const raw of collection) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const record = raw as Record<string, unknown>
+    const id = stringOf(record.id) ?? stringOf(record._id) ?? stringOf(record.scenarioConfigId)
+    if (id === undefined || seen.has(id)) continue
+    const name = collapseWhitespace(stringOf(record.name) ?? stringOf(record.title) ?? id)
+    const taskflowId = stringOf(record.taskflowId) ?? stringOf(record._taskflowId) ?? stringOf(record.workflowId)
+    const statuses = readWorkflowStatuses(record.statuses ?? record.taskflowstatuses ?? record.status)
+    const statusIds = statuses.length > 0
+      ? statuses.map(status => status.id)
+      : readStringArray(record.statusIds ?? record._statusIds)
+    seen.add(id)
+    configs.push({
+      id,
+      name,
+      ...(taskflowId === undefined ? {} : { taskflowId }),
+      statusIds,
+    })
+  }
+  return configs
+}
+
+/**
+ * Merge two readings of the same saved view.
+ *
+ * The default-view route answers with the view's id and name only, while the
+ * custom-view list carries its columns (`vertical`, `_verticalIds`, filter). The
+ * entry that describes the columns wins; the default flag survives either way.
+ */
+function mergedView(left: TeambitionView, right: TeambitionView): TeambitionView {
+  const richer = viewFacts(right) >= viewFacts(left) ? right : left
+  const isDefault = left.isDefault === true || right.isDefault === true
+  return { ...richer, ...(isDefault ? { isDefault: true } : {}) }
+}
+
+/** How much one view reading says about the board it renders. */
+function viewFacts(view: TeambitionView): number {
+  return (view.vertical === 'unknown' ? 0 : 2) + (view.scenarioConfigIds.length > 0 ? 1 : 0) + (view.filter === undefined ? 0 : 1)
+}
+
+/** Read the saved views out of a view payload (a collection or one object). */
+function readViews(payload: unknown): readonly TeambitionView[] {
+  const collection = readCollection(payload)
+  if (collection === undefined) {
+    const single = readSingleObject(payload)
+    const view = single === undefined ? undefined : readView(single, false)
+    return view === undefined ? [] : [view]
+  }
+  const views: TeambitionView[] = []
+  const seen = new Set<string>()
+  for (const raw of collection) {
+    const view = readView(raw, false)
+    if (view === undefined || seen.has(view.id)) continue
+    seen.add(view.id)
+    views.push(view)
+  }
+  return views
+}
+
+/** Unwrap one object out of a `{ result: {...} }` style envelope. */
+function readSingleObject(payload: unknown): Record<string, unknown> | undefined {
+  if (Array.isArray(payload)) return readSingleObject(payload[0])
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const record = payload as Record<string, unknown>
+  for (const key of ['result', 'data', 'view', 'smartgroup', 'projectDefaultSmartgroup']) {
+    const inner = record[key]
+    if (typeof inner === 'object' && inner !== null && !Array.isArray(inner)) return inner as Record<string, unknown>
+  }
+  return record
+}
+
+/**
+ * Whether a parsed body is one Teambition resource rather than an error
+ * envelope.
+ *
+ * Resources carry an `_id`/`id`; the failure envelope does not. This keeps a
+ * resource's `name` (for example a default smartgroup called "My tasks") from
+ * being read as an error code by `readApiError`.
+ */
+function looksLikeResource(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return record._id !== undefined || record.id !== undefined
+}
+
+/**
+ * Read one saved view.
+ * @param raw - one smartgroup object (or a default-view object).
+ * @param isDefault - the route answered as the project default view.
+ */
+function readView(raw: unknown, isDefault: boolean): TeambitionView | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const record = raw as Record<string, unknown>
+  const id = stringOf(record.id) ?? stringOf(record._id) ?? stringOf(record.smartgroupId) ?? stringOf(record._smartgroupId)
+  if (id === undefined) return undefined
+  const name = collapseWhitespace(stringOf(record.name) ?? stringOf(record.title) ?? id)
+  // A saved view carries its board settings in a nested `view` object; the
+  // default-view route answers the smartgroup itself.
+  const nestedView = typeof record.view === 'object' && record.view !== null
+    ? record.view as Record<string, unknown>
+    : undefined
+  const vertical = readVertical(
+    record.vertical ?? record._vertical ?? nestedView?.vertical ?? nestedView?._vertical ?? record.viewType,
+  )
+  const scenarioConfigIds = readStringArray(
+    record.scenarioConfigIds
+      ?? record._scenarioConfigIds
+      ?? record.scenariofieldconfigIds
+      ?? record.scenarioConfigId
+      ?? nestedView?.scenarioConfigIds
+      ?? nestedView?._scenarioConfigIds
+      ?? nestedView?._verticalIds,
+  )
+  const filter = stringOf(record.filter) ?? stringOf(nestedView?.filter)
+  const orderBy = stringOf(record.orderBy) ?? stringOf(record.order) ?? stringOf(nestedView?.orderBy)
+  const flagged = record.isDefault === true || record.default === true
+  return {
+    id,
+    name,
+    vertical,
+    scenarioConfigIds,
+    ...(filter === undefined ? {} : { filter }),
+    ...(orderBy === undefined ? {} : { orderBy }),
+    ...(isDefault || flagged ? { isDefault: true } : {}),
+  }
+}
+
+/** Normalize the board orientation of a saved view. */
+function readVertical(value: unknown): 'stage' | 'status' | 'unknown' {
+  if (typeof value !== 'string') return 'unknown'
+  const normalized = value.toLowerCase()
+  if (normalized.includes('status') || normalized.includes('taskflow')) return 'status'
+  if (normalized.includes('stage')) return 'stage'
+  return 'unknown'
+}
+
+/** Read an array of id strings (a single id counts as a one-entry array). */
+function readStringArray(value: unknown): string[] {
+  const source = Array.isArray(value) ? value : [value]
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const entry of source) {
+    if (typeof entry !== 'string') continue
+    const text = entry.trim()
+    if (text === '' || seen.has(text)) continue
+    seen.add(text)
+    ids.push(text)
+  }
+  return ids
 }
 
 /** Read the id of a freshly created task out of a create response. */
