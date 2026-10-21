@@ -269,6 +269,11 @@ function tasklistPicker(scope: ParentNode): HTMLSelectElement {
   return scope.querySelector('[data-dsh-part="tasklist-picker"] select') as HTMLSelectElement
 }
 
+/** The persisted task-module controls. */
+function parsedTaskView(): Record<string, unknown> {
+  return JSON.parse(localStorage.getItem(TASK_VIEW_STORAGE_KEY) ?? '{}') as Record<string, unknown>
+}
+
 describe('TeambitionPanel', () => {
   it('renders the board with the project columns, cards and workspace chips', async () => {
     const h = harness()
@@ -633,10 +638,48 @@ describe('TeambitionPanel task module', () => {
     await act(async () => { pickOption(sort, 'priority') })
 
     expect(JSON.parse(localStorage.getItem(TASK_VIEW_STORAGE_KEY) ?? '{}')).toEqual({
+      view: 'tasks',
       groupBy: 'stage',
       filterBy: 'open',
       sortBy: 'priority',
+      tasklistFilter: '',
     })
+  })
+
+  it('remembers the board as the default view', async () => {
+    const { container } = await mountTasks()
+    await click(viewTab(container, zh['view.board']) as HTMLButtonElement)
+    expect(parsedTaskView().view).toBe('board')
+
+    // A fresh mount opens on the remembered surface instead of the task table.
+    const h = harness(stateView(), DETAIL_TASKS)
+    const next = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => viewTab(next, zh['view.board'])?.getAttribute('aria-selected') === 'true', 'the remembered board view')
+    expect(next.querySelector('[data-dsh-part="task-table"]')).toBeNull()
+  })
+
+  it('opens the default view chosen in settings', async () => {
+    const { container } = await mountTasks()
+    await click(buttonByText(container, zh['header.settings']) as HTMLButtonElement)
+    const select = container.querySelector('[data-dsh-part="default-view"] select') as HTMLSelectElement
+    await act(async () => { pickOption(select, 'board') })
+
+    // Picking the default view leaves settings and lands on it.
+    expect(container.querySelector('[data-dsh-part="task-table"]')).toBeNull()
+    expect(parsedTaskView().view).toBe('board')
+  })
+
+  it('filters the table by task list', async () => {
+    const { container } = await mountTasks(DETAIL_ALL)
+    const filter = container.querySelector('[data-dsh-part="tasklist-filter"] select') as HTMLSelectElement
+    expect(filter).not.toBeNull()
+    await act(async () => { pickOption(filter, 'l2') })
+
+    // Only the second list's card stays in the table.
+    const visible = rows(container).map(row => row.getAttribute('data-card-id'))
+    expect(visible).toEqual(['t2'])
+    expect(container.querySelector('[data-dsh-part="task-count"]')?.textContent).toContain('1 / 2')
+    expect(parsedTaskView().tasklistFilter).toBe('l2')
   })
 
   it('restores the remembered task view settings on mount', async () => {
