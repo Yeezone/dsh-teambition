@@ -315,6 +315,20 @@
   word-break: break-word;
 }
 
+/* A completed card keeps its title but dims it and leads with a check mark. */
+.cardTitleDone {
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: line-through;
+}
+
+.doneMark {
+  display: inline-block;
+  margin-right: 4px;
+  font-weight: 700;
+  color: var(--dsw-alias-label-success);
+  text-decoration: none;
+}
+
 .cardMeta {
   display: flex;
   align-items: center;
