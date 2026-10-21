@@ -1,0 +1,10 @@
+# The runtime SDK (`@deepseek-ai/dsh` and its cohort) is supplied by the DSH
+# host at runtime; this repository only needs it for types and tests.
+# Native postinstall builds pulled in through that cohort are not used by the
+# plugin, so they stay explicitly disabled instead of being built.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
+  koffi: false
+  node-pty: false
+  protobufjs: false
