@@ -142,8 +142,16 @@ export function projectTasklistCandidates(projectId: string): readonly Teambitio
  * @param taskId - remote task id.
  */
 export function taskStatusUpdateCandidates(taskId: string): readonly TeambitionEndpoint[] {
-  const path = `/v3/task/${encodeURIComponent(taskId)}/taskflowstatus`
+  const id = encodeURIComponent(taskId)
+  const legacy = `/tasks/${id}/taskflowstatus`
+  const path = `/v3/task/${id}/taskflowstatus`
   return [
+    {
+      id: 'task-status-update-legacy-web',
+      base: 'web',
+      path: legacy,
+      purpose: 'move the task to a workflow status through the www proxy',
+    },
     { id: 'task-status-update-api', base: 'api', path, purpose: 'write the task workflow status' },
     { id: 'task-status-update-web', base: 'web', path, purpose: 'write the task workflow status through the www proxy' },
   ]
@@ -221,15 +229,21 @@ export function projectViewCandidates(projectId: string): readonly TeambitionEnd
 }
 
 /**
- * Candidates that move one task between kanban stages. The legacy update route
- * takes `_stageId` on the task resource.
+ * Candidates that move one task between kanban stages.
+ *
+ * The current web client drags a card with `PUT /api/tasks/{id}/stage/move`
+ * (`{ stageId, preTaskId, nextTaskId }`); the legacy task resource accepts
+ * `_stageId` in principle but the www proxy answers 204 without applying it,
+ * so the dedicated move route is tried first.
  * @param taskId - remote task id.
  */
 export function taskStageUpdateCandidates(taskId: string): readonly TeambitionEndpoint[] {
   const id = encodeURIComponent(taskId)
+  const move = `/tasks/${id}/stage/move`
   const legacy = `/tasks/${id}`
   const path = `/v3/task/${id}/stage/update`
   return [
+    { id: 'task-stage-move-web', base: 'web', path: move, purpose: 'move the task to a kanban stage through the www proxy' },
     { id: 'task-stage-update-legacy-web', base: 'web', path: legacy, purpose: 'legacy task update through the www proxy' },
     { id: 'task-stage-update-api', base: 'api', path, purpose: 'write the task kanban stage' },
     { id: 'task-stage-update-web', base: 'web', path, purpose: 'write the task kanban stage through the www proxy' },

@@ -4,6 +4,33 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-21
+
+### Added
+
+- Drag and drop on the board: grab a card and drop it on another column to move
+  it there. Dropping on a workflow status column updates the workflow status,
+  dropping on a stage column updates the kanban stage, and the card's own column
+  is never a drop target. Busy cards (running, patching) stay non-draggable, and
+  the move-to-column select in the card stays available as the keyboard path.
+- The hovered column highlights while a card is dragged over it, and the dragged
+  card fades so the drop position stays readable.
+
+### Tests
+
+- Three drag-and-drop cases: stage drop, workflow-status drop, and dropping a
+  card back onto its own column issuing no write (149 tests in total).
+
+### Fixed
+
+- Moving a card to another kanban stage now persists on Teambition. The legacy
+  PUT /api/tasks/{id} route answers 204 without applying _stageId; the client
+  now calls the same route the web app uses, PUT /api/tasks/{id}/stage/move, so
+  both dragging and the card's move select really change the remote column.
+- Moving a card to another workflow status now uses the legacy
+  PUT /api/tasks/{id}/taskflowstatus route with _taskflowstatusId, the body
+  the web client sends.
+
 ## [0.4.0] - 2026-10-21
 
 ### Added

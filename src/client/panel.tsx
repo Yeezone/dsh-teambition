@@ -444,6 +444,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
   const [runningCardId, setRunningCardId] = useState<string>()
   const [pendingCardId, setPendingCardId] = useState<string>()
   const [cardErrors, setCardErrors] = useState<Readonly<Record<string, string>>>({})
+  /** Card being dragged, plus the column it currently hovers as a drop target. */
+  const [draggingCardId, setDraggingCardId] = useState<string>()
+  const [dropColumnId, setDropColumnId] = useState<string>()
 
   const [draftTitle, setDraftTitle] = useState('')
   const [draftNote, setDraftNote] = useState('')
@@ -695,6 +698,16 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     else if (projectId !== undefined) await loadProject(projectId, tasklistId, viewId)
     setPendingCardId(undefined)
   }, [api, loadProject, pendingCardId, projectId, tasklistId, viewId, setCardError])
+
+  /** Move a dragged card into a column, choosing the route by kind. */
+  const dropCard = useCallback((cardId: string, column: TeambitionColumnView): void => {
+    const card = detail?.cards.find(candidate => candidate.id === cardId)
+    if (card === undefined || column.id === '') return
+    const columns = detail?.columns ?? []
+    if (columnIdOf(card, columns) === column.id) return
+    if (column.kind === 'status') void changeStatus(card.id, column.id)
+    else void changeStage(card.id, column.id)
+  }, [changeStage, changeStatus, detail])
 
   /** Persist one card's workspace override (empty id clears it). */
   const bindCard = useCallback(async (card: TeambitionCardView, workspaceId: string): Promise<void> => {
@@ -967,7 +980,14 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
     ): readonly TeambitionCardView[] =>
       column.id === '' ? boardCards : boardCards.filter(card => columnIdOf(card, allColumns) === column.id)
 
-    const renderColumn = (column: TeambitionColumnView, columnCards: readonly TeambitionCardView[], moveColumns: readonly TeambitionColumnView[]): ReactElement => (
+    const renderColumn = (column: TeambitionColumnView, columnCards: readonly TeambitionCardView[], moveColumns: readonly TeambitionColumnView[]): ReactElement => {
+      // A column accepts a dragged card only when the drop actually moves it:
+      // the placeholder bucket and the card's own column are not targets.
+      const acceptsDrop = draggingCardId !== undefined
+        && column.id !== ''
+        && !columnCards.some(card => card.id === draggingCardId)
+      const isDropTarget = acceptsDrop && dropColumnId === column.id
+      return (
       <section
         className={css.column}
         key={column.id === '' ? '__all' : column.id}
@@ -975,6 +995,25 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
         data-column-id={column.id}
         data-column-kind={column.kind}
         data-tasklist-id={column.tasklistId ?? ''}
+        data-drop-target={isDropTarget ? 'true' : 'false'}
+        onDragOver={event => {
+          if (!acceptsDrop) return
+          event.preventDefault()
+          if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
+          if (dropColumnId !== column.id) setDropColumnId(column.id)
+        }}
+        onDragLeave={event => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+          if (dropColumnId === column.id) setDropColumnId(undefined)
+        }}
+        onDrop={event => {
+          event.preventDefault()
+          const cardId = event.dataTransfer?.getData('text/plain') ?? draggingCardId ?? ''
+          setDropColumnId(undefined)
+          setDraggingCardId(undefined)
+          if (cardId === '') return
+          dropCard(cardId, column)
+        }}
       >
         <header className={css.columnHead} data-dsh-part="column-head">
           <h3 className={css.columnTitle}>{column.name}</h3>
@@ -1014,6 +1053,9 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
                 busy: runningCardId !== undefined || pendingCardId !== undefined,
                 error: cardErrors[card.id],
                 choice: cardChoice(card, state.settings),
+                dragging: draggingCardId === card.id,
+                onDragStart: () => { setDraggingCardId(card.id) },
+                onDragEnd: () => { setDraggingCardId(undefined); setDropColumnId(undefined) },
                 onRun: () => { void runCard(card) },
                 onStatus: statusId => { void changeStatus(card.id, statusId) },
                 onStage: stageId => { void changeStage(card.id, stageId) },
@@ -1021,7 +1063,8 @@ export function TeambitionPanel(props: TeambitionPanelProps): ReactElement {
               }))}
         </div>
       </section>
-    )
+      )
+    }
 
     const renderBoard = (
       boardColumns: readonly TeambitionColumnView[],
@@ -1574,6 +1617,10 @@ interface CardProps {
   readonly busy: boolean
   readonly error: string | undefined
   readonly choice: TeambitionWorkspaceChoice | undefined
+  /** Whether this card is the one currently being dragged. */
+  readonly dragging: boolean
+  readonly onDragStart: () => void
+  readonly onDragEnd: () => void
   readonly onRun: () => void
   readonly onStatus: (statusId: string) => void
   readonly onStage: (stageId: string) => void
@@ -1587,7 +1634,7 @@ interface CardProps {
  * @returns the card element.
  */
 function renderCard(props: CardProps): ReactElement {
-  const { card, statusName, columns, currentColumnId, statusView, roster, detail, running, pending, busy, error, choice } = props
+  const { card, statusName, columns, currentColumnId, statusView, roster, detail, running, pending, busy, error, choice, dragging } = props
   const boundWorkspace = choice === undefined ? undefined : roster.find(item => item.workspaceId === choice.workspaceId)
   const chipText = choice === undefined
     ? t('board.unboundWorkspace')
@@ -1612,7 +1659,18 @@ function renderCard(props: CardProps): ReactElement {
       data-dsh-part="card"
       data-card-id={card.id}
       data-running={running ? 'true' : 'false'}
+      data-dragging={dragging ? 'true' : 'false'}
       data-workspace-bound={choice === undefined ? 'false' : 'true'}
+      draggable={!busy}
+      title={busy ? undefined : t('board.dragHint')}
+      onDragStart={event => {
+        // The data transfer carries the id so a drop target does not have to
+        // track render state, and it makes the drag a real move for the browser.
+        event.dataTransfer?.setData('text/plain', card.id)
+        if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'
+        props.onDragStart()
+      }}
+      onDragEnd={() => { props.onDragEnd() }}
     >
       <h4 className={css.cardTitle}>{card.title}</h4>
       <div className={css.cardMeta}>

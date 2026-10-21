@@ -9,7 +9,7 @@ and submits the card's title, project, link, updated time and note as the openin
 prompt.
 
 - Repository: <https://github.com/Yeezone/dsh-teambition>
-- Latest release: `v0.1` (`0.1.0`); `main` carries the `0.1.x` increments
+- Latest release: `v0.1` (`0.1.0`); `main` is at `0.5.0`
 - License: Apache-2.0
 
 ## Why it exists
@@ -48,7 +48,8 @@ default, then the panel-wide default workspace.
   status; stage views render one column group per stage. Every column header has
   a "+" that opens the create form with that column preselected, and cards carry
   their workspace marker plus the actions Run, Open in Teambition, Bind
-  workspace and Move to column.
+  workspace and Move to column. Cards drag between columns: drop one on another
+  column to move it there (workflow status or stage, by the column kind).
 - **New card form** at the bottom of the panel: title, optional note, target
   stage.
 - **Settings view**: cookie (write / clear), diagnose probes, operator id,
@@ -69,6 +70,10 @@ default, then the panel-wide default workspace.
   one column per workflow status (the tasks module look), stage views keep the
   stage columns; "executed by me" / "created by me" views filter their cards,
   and every column can quick-add a card.
+- Drag and drop: grab a card on the board and drop it on another column to move
+  it there. Workflow status columns update the status, stage columns update the
+  stage, the hovered column highlights, and busy cards stay non-draggable; the
+  Move to column select in the card remains the keyboard path.
 - Two-level switching (project, then task list). Projects with many task lists
   are grouped by list instead of flattened into dozens of same-named columns; the
   selection is remembered in `localStorage` and restored on the next visit.
