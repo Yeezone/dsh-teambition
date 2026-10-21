@@ -408,15 +408,71 @@ export class TeambitionClient {
    */
   async projectTasks(projectId: string): Promise<readonly TeambitionTask[]> {
     const failures: string[] = []
+    const byId = new Map<string, TeambitionTask>()
+    let answered = false
     for (const endpoint of this.ordered(projectTaskCandidates(projectId))) {
       try {
-        return await this.walkTaskPages(endpoint, projectId)
+        for (const task of await this.walkTaskPages(endpoint, projectId)) byId.set(task.id, task)
+        answered = true
+        break
       } catch (error) {
         failures.push(`${endpoint.base}:${endpoint.path} -> ${redactMessage(messageOf(error), this.cookie)}`)
         if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
       }
     }
+    // Workflow projects answer the project-level collection with an empty list
+    // even though the board is full; the task-list-scoped collection is the one
+    // the web client fills its board from, so always union it in.
+    for (const tasklist of await this.tasklistsQuietly(projectId)) {
+      try {
+        for (const task of await this.walkTasklistPages(projectId, tasklist.id)) byId.set(task.id, task)
+        answered = true
+      } catch (error) {
+        if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+        failures.push(`tasklist ${tasklist.id} -> ${redactMessage(messageOf(error), this.cookie)}`)
+      }
+    }
+    if (answered) return [...byId.values()]
     throw new TeambitionApiError('api', `no project-task endpoint answered: ${truncate(failures.join('; '), 400)}`)
+  }
+
+  /**
+   * Read one task list's tasks, walking the 1-based `page` pages.
+   *
+   * The internal collection ignores `pageSize` and returns at most 300 rows per
+   * page, so the caller keeps walking until a page comes back empty or repeats.
+   */
+  private async walkTasklistPages(projectId: string, tasklistId: string): Promise<readonly TeambitionTask[]> {
+    const byId = new Map<string, TeambitionTask>()
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const endpoint: TeambitionEndpoint = {
+        base: 'web',
+        path: '/tasks',
+        id: 'tasklist-tasks-legacy-web',
+        purpose: "one task list's tasks through the www proxy",
+      }
+      const response = await this.send(
+        endpointWithQuery(endpoint, { _projectId: projectId, _tasklistId: tasklistId, pageSize: PAGE_SIZE, page }),
+        'GET',
+      )
+      const tasks = readTasks(response.json, projectId)
+      if (tasks.length === 0) break
+      const before = byId.size
+      for (const task of tasks) byId.set(task.id, task)
+      if (byId.size === before) break
+      if (tasks.length < PAGE_SIZE) break
+    }
+    return [...byId.values()]
+  }
+
+  /** Task lists of one project, swallowing failures (the list is optional). */
+  private async tasklistsQuietly(projectId: string): Promise<readonly TeambitionTasklist[]> {
+    try {
+      return await this.projectTasklists(projectId)
+    } catch (error) {
+      if (error instanceof TeambitionApiError && error.failure === 'invalid-cookie') throw error
+      return []
+    }
   }
 
   /** Paginate one project-task endpoint. */
