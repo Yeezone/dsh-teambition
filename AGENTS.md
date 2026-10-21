@@ -23,9 +23,10 @@ plugin, mounted as a profile bundle without modifying the DSH source checkout.
   Cross-plugin collaboration goes through cordis services (`ctx.slots`,
   `ctx.sessions`, `ctx.workspaces`, `ctx.uiWorkspace`), never through value
   imports.
-- Shared build preset: `tsdown.config.ts` imports the repository-root
-  `shared/tsdown.client.ts` (platform seed table `shared/web-platform.ts`);
-  this package keeps no copy.
+- Shared build preset: `tsdown.config.ts` imports the vendored
+  `shared/tsdown.client.ts` (copied from the dsh-web monorepo preset together
+  with the platform seed table `shared/web-platform.ts`). Keep that copy in sync
+  when the upstream preset changes.
 - Bilingual copy: dictionaries live in `src/client/locales.ts` (`zh` is the key
   source, `en` carries the complete mirror). README is a pair
   (`README.md` + `README.zh.md`) recorded in `README.i18n.yaml`.
