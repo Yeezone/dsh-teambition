@@ -1,0 +1,19 @@
+dsh-teambition
+Copyright 2026 Yeezone
+
+This product includes software developed at
+the dsh-web project (https://github.com/zhu1090093659/dsh-web),
+licensed under the Apache License, Version 2.0.
+
+The following parts originated in that repository and were adapted here:
+
+- shared/tsdown.client.ts and shared/web-platform.ts: the client-bundle build
+  preset shared by the dsh-web plugin family (vendored so this repository builds
+  standalone).
+- src/core/teambition/* and parts of src/host/{client,transport,http}.ts: the
+  Teambition REST client, endpoint candidates, task mapping, and redaction
+  helpers from the dsh-web dsh-task-board package.
+
+The DSH plugin panel itself (src/client, src/host/{service,routes,config-store,
+agent-tool}, src/core/protocol.ts, the sidebar/main slot registration, and the
+workspace-execution flow) was written for this repository.

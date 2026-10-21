@@ -1,0 +1,7 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.pnpm-store/
+.pnpm-cache/
+.DS_Store
+Thumbs.db

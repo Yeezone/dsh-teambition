@@ -1,0 +1,544 @@
+/* Teambition panel: sidebar page rendered into the layout's main slot. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-bg-base, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--dsw-alias-separator-primary, rgba(127, 127, 127, 0.22));
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.statusOn {
+  color: var(--dsw-alias-label-success);
+}
+
+.statusOff {
+  color: var(--dsw-alias-label-warning);
+}
+
+.spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+.projectField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ----------------------------------------------------------------- atoms */
+
+.button,
+.select,
+.input,
+.textarea {
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 12px;
+  color: inherit;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+  background: transparent;
+}
+
+.button {
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.button:focus-visible,
+.select:focus-visible,
+.input:focus-visible,
+.textarea:focus-visible,
+.link:focus-visible,
+.tableSelect:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color);
+  outline-offset: 1px;
+}
+
+.primary {
+  color: var(--dsw-alias-label-primary-foreground);
+  border-color: var(--dsw-alias-button-primary-fill);
+  background: var(--dsw-alias-button-primary-fill);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.select {
+  max-width: 260px;
+  padding: 3px 6px;
+}
+
+/* The dropdown list of a native <select> is painted by the platform, not by
+ * the panel: it keeps a light background even in dark themes while the option
+ * text inherits our light label color, which made the list unreadable (white on
+ * white). Painting the rows explicitly keeps both themes legible. */
+.select option,
+.select optgroup,
+.tableSelect option,
+.tableSelect optgroup {
+  background-color: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, Canvas));
+  color: var(--dsw-alias-label-primary, CanvasText);
+}
+
+.select optgroup,
+.tableSelect optgroup {
+  font-weight: 600;
+}
+
+.input {
+  width: 100%;
+  padding: 5px 8px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 56px;
+  padding: 5px 8px;
+  resize: vertical;
+}
+
+.textareaCookie {
+  min-height: 92px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.link {
+  color: var(--dsw-alias-label-primary-bluish);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.muted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+/* ------------------------------------------------------------------ body */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stateBox {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px 16px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.errorText {
+  color: var(--dsw-alias-label-danger);
+}
+
+.notice {
+  margin: 0;
+  padding: 6px 16px;
+  font-size: 12px;
+}
+
+.noticeError {
+  color: var(--dsw-alias-label-danger);
+}
+
+/* ----------------------------------------------------------------- board */
+
+.board {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 260px;
+  min-height: 0;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+.columnHead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+}
+
+.columnTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columnCount {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.columnBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.columnEmpty {
+  margin: 0;
+  padding: 6px 2px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ----------------------------------------------------------------- cards */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.28));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base, transparent);
+}
+
+.card[data-running='true'] {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.badge,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.28));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipOn {
+  color: var(--dsw-alias-label-success);
+  border-color: currentColor;
+}
+
+.chipUnbound {
+  color: var(--dsw-alias-label-warning);
+  border-style: dashed;
+  border-color: currentColor;
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cardError {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-danger);
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
+.boxed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+.formTitle,
+.settingsTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.formGrid {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* -------------------------------------------------------------- settings */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+}
+
+.settingsBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+.settingsHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.probeList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.probe {
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.2));
+}
+
+.probeFacts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.projectTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.projectTable th,
+.projectTable td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.16));
+  white-space: nowrap;
+}
+
+.projectTable th {
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.tableSelect {
+  box-sizing: border-box;
+  max-width: 220px;
+  padding: 2px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: inherit;
+  border: 1px solid var(--dsw-alias-border-secondary, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+  background: transparent;
+}
+
+/* ------------------------------------------------ task list grouping */
+
+/* "All task lists" of a project with several lists stacks one board per list:
+   columns belong to task lists, so a flat board would repeat column names. */
+.tasklistGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+
+.tasklistGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.tasklistTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+}
+
+.tasklistName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.boardNested {
+  flex: 0 0 auto;
+  min-height: auto;
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.boardNested .column {
+  max-height: 420px;
+}

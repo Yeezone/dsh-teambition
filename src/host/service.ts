@@ -1,0 +1,439 @@
+/**
+ * Host orchestration of the Teambition panel plugin.
+ *
+ * The service binds the persisted settings to the cookie-authenticated client
+ * and turns every panel route into one explicit operation. It owns three
+ * invariants: the cookie never leaves the host (views carry only the masked
+ * settings), remote writes happen only because a caller asked for them, and a
+ * rejected request is surfaced as a classified envelope instead of an
+ * unhandled rejection.
+ *
+ * @module dsh-teambition/host/service
+ */
+import {
+  cardUrl,
+  resolveWorkspace,
+  type TeambitionBindRequest,
+  type TeambitionCardView,
+  type TeambitionConfigRequest,
+  type TeambitionDiagnoseView,
+  type TeambitionProjectDetail,
+  type TeambitionProjectRequest,
+  type TeambitionProjectsView,
+  type TeambitionStageView,
+  type TeambitionStateView,
+  type TeambitionTaskCreateRequest,
+  type TeambitionTaskStageRequest,
+  type TeambitionTaskStatusRequest,
+} from '../core/protocol.ts'
+import {
+  redactMessage,
+  type TeambitionDiagnostics,
+  type TeambitionEndpoint,
+  type TeambitionProject,
+  type TeambitionTask,
+  type TeambitionTasklist,
+  type TeambitionWorkflowStatus,
+} from '../core/teambition/index.ts'
+import {
+  TeambitionClient,
+  TeambitionApiError,
+  type TeambitionClientOptions,
+  type TeambitionStage,
+  type TeambitionTaskWrite,
+} from './client.ts'
+import type { TeambitionTransport } from './transport.ts'
+import {
+  normalizeSettings,
+  settingsView,
+  type TeambitionConfigStore,
+  type TeambitionHostSettings,
+  type TeambitionHostState,
+} from './config-store.ts'
+
+/** Successful route envelope. */
+export interface TeambitionEnvelopeOk {
+  readonly ok: true
+  readonly value: unknown
+}
+
+/** Failed route envelope. */
+export interface TeambitionEnvelopeError {
+  readonly ok: false
+  readonly error: { readonly code: string; readonly message: string }
+}
+
+/** Envelope every host route returns. */
+export type TeambitionEnvelope = TeambitionEnvelopeOk | TeambitionEnvelopeError
+
+/** Build a successful envelope. */
+export function ok(value: unknown): TeambitionEnvelopeOk {
+  return { ok: true, value }
+}
+
+/** Build a failed envelope. */
+export function fail(code: string, message: string): TeambitionEnvelopeError {
+  return { ok: false, error: { code, message } }
+}
+
+/**
+ * One classified service failure. Callers translate it into an envelope; it
+ * never carries the cookie or a raw response body.
+ */
+export class TeambitionHostError extends Error {
+  constructor(
+    /** Stable machine code of the failure. */
+    readonly code: 'not-configured' | 'invalid-request' | 'failed',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'TeambitionHostError'
+  }
+}
+
+/** The sub-set of the client the service depends on (tests inject a fake). */
+export interface TeambitionClientPort {
+  readonly configured: boolean
+  diagnose(): Promise<TeambitionDiagnostics>
+  listProjects(): Promise<{ projects: readonly TeambitionProject[]; endpoint: TeambitionEndpoint }>
+  projectStatuses(projectId: string): Promise<readonly TeambitionWorkflowStatus[]>
+  projectTasks(projectId: string): Promise<readonly TeambitionTask[]>
+  projectStages(projectId: string): Promise<readonly TeambitionStage[]>
+  projectTasklists(projectId: string): Promise<readonly TeambitionTasklist[]>
+  updateTaskStatus(taskId: string, statusId: string): Promise<void>
+  updateTaskStage(taskId: string, stageId: string): Promise<void>
+  createTask(input: TeambitionTaskWrite): Promise<{ taskId: string }>
+}
+
+/** Creation seams of the service (tests inject transport, clock and client). */
+export interface TeambitionServiceOptions {
+  /** Transport override handed to every created client. */
+  readonly transport?: TeambitionTransport
+  /** Clock override for `lastSyncAt` and diagnostics timestamps. */
+  readonly now?: () => number
+  /** Client factory override (tests). */
+  readonly createClient?: (options: TeambitionClientOptions) => TeambitionClientPort
+}
+
+/**
+ * One bound request failure: the classified error plus its envelope. Routes
+ * and the agent tool both report exactly this shape.
+ */
+export type TeambitionFailure = TeambitionEnvelopeError
+
+/** Result of one service operation. */
+export type TeambitionResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | TeambitionFailure
+
+/**
+ * The Teambition host service: one instance per plugin mount, backed by the
+ * persisted config store.
+ */
+export class TeambitionService {
+  private readonly store: TeambitionConfigStore
+  private readonly transport: TeambitionTransport | undefined
+  private readonly now: () => number
+  private readonly createClient: (options: TeambitionClientOptions) => TeambitionClientPort
+
+  constructor(store: TeambitionConfigStore, options: TeambitionServiceOptions = {}) {
+    this.store = store
+    this.transport = options.transport
+    this.now = options.now ?? Date.now
+    this.createClient = options.createClient ?? (clientOptions => new TeambitionClient(clientOptions))
+  }
+
+  /** Panel snapshot: masked settings, known projects, last diagnostics. */
+  async stateView(): Promise<TeambitionStateView> {
+    const state = await this.load()
+    return {
+      settings: settingsView(state),
+      projects: state.projects ?? [],
+      ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
+    }
+  }
+
+  /** Apply one settings patch and persist it. */
+  async updateConfig(request: TeambitionConfigRequest): Promise<TeambitionStateView> {
+    const state = await this.load()
+    const settings = patchSettings(state.settings, request)
+    // A different cookie invalidates the previous probe. Drop the stale verdict
+    // so the settings view never shows "cookie invalid" next to a fresh cookie.
+    const cookieChanged = settings.cookie !== state.settings.cookie
+    await this.store.save({
+      ...state,
+      settings,
+      ...(cookieChanged ? { diagnostics: undefined, lastError: undefined } : {}),
+    })
+    return this.stateView()
+  }
+
+  /**
+   * Probe the stored cookie against every project-list candidate and persist
+   * the sanitized diagnostics. Auto-corrects `apiBase` to the winning host.
+   */
+  async diagnose(): Promise<TeambitionDiagnoseView> {
+    const state = await this.load()
+    if (state.settings.cookie === undefined) {
+      const diagnostics: TeambitionDiagnostics = {
+        probedAt: this.now(),
+        cookieConfigured: false,
+        conclusion: 'no-cookie',
+        message: 'No Teambition cookie is configured.',
+        results: [],
+      }
+      await this.store.save({ ...state, diagnostics, lastError: diagnostics.message })
+      return { diagnostics }
+    }
+    const client = this.clientFor(state.settings)
+    try {
+      const diagnostics = await client.diagnose()
+      const winningBase = diagnostics.projectEndpoint?.base ?? state.settings.apiBase
+      await this.store.save({
+        ...state,
+        settings: { ...state.settings, apiBase: winningBase },
+        diagnostics,
+        lastError: diagnostics.conclusion === 'usable' ? undefined : diagnostics.message,
+      })
+      return { diagnostics }
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /** Refresh the joined project list and persist the snapshot. */
+  async listProjects(): Promise<TeambitionProjectsView> {
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    try {
+      const listing = await client.listProjects()
+      await this.store.save({
+        ...state,
+        settings: { ...state.settings, apiBase: listing.endpoint.base },
+        projects: listing.projects,
+        lastSyncAt: this.now(),
+        lastError: undefined,
+      })
+      return { projects: listing.projects }
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /**
+   * One project with its task lists, stages, workflow statuses and resolved
+   * cards.
+   *
+   * Columns and cards belong to a task list, so a request that names one is
+   * narrowed to it; rows the remote API leaves unattributed are treated as
+   * belonging to the only list of a single-list project.
+   */
+  async projectDetail(request: TeambitionProjectRequest): Promise<TeambitionProjectDetail> {
+    const projectId = request.projectId
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    const known = (state.projects ?? []).find(project => project.id === projectId)
+    const project: TeambitionProject = known ?? { id: projectId, name: projectId }
+    try {
+      const [tasklists, stages, statuses, tasks] = await Promise.all([
+        client.projectTasklists(projectId),
+        client.projectStages(projectId),
+        client.projectStatuses(projectId),
+        client.projectTasks(projectId),
+      ])
+      const view = settingsView(state)
+      const stageViews = stages.map(stage => stageView(stage, tasklists))
+      const cardViews = tasks.map(task => cardView(task, project, view, tasklists))
+      const requested = request.tasklistId
+      const stagesOfList = requested === undefined ? stageViews : stageViews.filter(stage => stage.tasklistId === requested)
+      const cardsOfList = requested === undefined ? cardViews : cardViews.filter(card => card.tasklistId === requested)
+      await this.store.save({ ...state, lastSyncAt: this.now(), lastError: undefined })
+      return { project, tasklists, stages: stagesOfList, statuses, cards: cardsOfList }
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /** Create one card (explicit user action; never a read side effect). */
+  async createTask(request: TeambitionTaskCreateRequest): Promise<{ taskId: string }> {
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    try {
+      return await client.createTask({
+        projectId: request.projectId,
+        title: request.title,
+        ...(request.note === undefined ? {} : { note: request.note }),
+        ...(request.tasklistId === undefined ? {} : { tasklistId: request.tasklistId }),
+        ...(request.stageId === undefined ? {} : { stageId: request.stageId }),
+        ...(request.statusId === undefined ? {} : { statusId: request.statusId }),
+        ...(request.executorId === undefined ? {} : { executorId: request.executorId }),
+      })
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /** Move one card to another workflow status. */
+  async setStatus(request: TeambitionTaskStatusRequest): Promise<Record<string, never>> {
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    try {
+      await client.updateTaskStatus(request.taskId, request.statusId)
+      return {}
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /** Move one card to another kanban column. */
+  async setStage(request: TeambitionTaskStageRequest): Promise<Record<string, never>> {
+    const state = await this.load()
+    const client = this.clientFor(state.settings)
+    try {
+      await client.updateTaskStage(request.taskId, request.stageId)
+      return {}
+    } catch (error) {
+      const message = describe(error)
+      await this.store.save({ ...state, lastError: message })
+      throw new TeambitionHostError('failed', message)
+    }
+  }
+
+  /** Replace the binding tables and/or the default workspace. */
+  async bind(request: TeambitionBindRequest): Promise<TeambitionStateView> {
+    return this.updateConfig(request)
+  }
+
+  /** Load the persisted state (memoized by the store). */
+  private async load(): Promise<TeambitionHostState> {
+    return (await this.store.load()).state
+  }
+
+  /** Create the client for one settings snapshot. */
+  private clientFor(settings: TeambitionHostSettings): TeambitionClientPort {
+    if (settings.cookie === undefined) {
+      throw new TeambitionHostError('not-configured', 'No Teambition cookie is configured.')
+    }
+    const options: TeambitionClientOptions = {
+      cookie: settings.cookie,
+      apiBase: settings.apiBase,
+      ...(settings.operatorId === undefined ? {} : { operatorId: settings.operatorId }),
+      ...(this.transport === undefined ? {} : { transport: this.transport }),
+    }
+    return this.createClient(options)
+  }
+}
+
+/** Create the service of one plugin mount. */
+export function createTeambitionService(
+  store: TeambitionConfigStore,
+  options: TeambitionServiceOptions = {},
+): TeambitionService {
+  return new TeambitionService(store, options)
+}
+
+/** Build one stage view, attributing it to its task list. */
+function stageView(stage: TeambitionStage, tasklists: readonly TeambitionTasklist[]): TeambitionStageView {
+  const tasklistId = tasklistIdOf(stage.tasklistId, tasklists)
+  return {
+    id: stage.id,
+    name: stage.name,
+    ...(tasklistId === undefined ? {} : { tasklistId }),
+    ...(stage.pos === undefined ? {} : { pos: stage.pos }),
+  }
+}
+
+/**
+ * Resolve the task list a stage or card belongs to.
+ *
+ * The remote rows of older projects carry no `tasklistId`; when the project
+ * has exactly one task list that list is the only possible owner.
+ */
+function tasklistIdOf(explicit: string | undefined, tasklists: readonly TeambitionTasklist[]): string | undefined {
+  if (explicit !== undefined) return explicit
+  return tasklists.length === 1 ? tasklists[0]?.id : undefined
+}
+
+/** Build one card view, resolving its execution workspace. */
+function cardView(
+  task: TeambitionTask,
+  project: TeambitionProject,
+  settings: ReturnType<typeof settingsView>,
+  tasklists: readonly TeambitionTasklist[],
+): TeambitionCardView {
+  const choice = resolveWorkspace(task.id, task.projectId, settings)
+  const tasklistId = tasklistIdOf(task.tasklistId, tasklists)
+  return {
+    id: task.id,
+    projectId: task.projectId,
+    projectName: project.name,
+    title: task.title,
+    ...(task.note === undefined ? {} : { note: task.note }),
+    ...(task.stageId === undefined ? {} : { stageId: task.stageId }),
+    ...(tasklistId === undefined ? {} : { tasklistId }),
+    ...(task.statusId === undefined ? {} : { statusId: task.statusId }),
+    ...(task.isDone === undefined ? {} : { isDone: task.isDone }),
+    ...(task.updatedAt === undefined ? {} : { updatedAt: task.updatedAt }),
+    ...(task.priority === undefined ? {} : { priority: task.priority }),
+    ...(choice === undefined ? {} : { workspaceId: choice.workspaceId, workspaceSource: choice.source }),
+    url: cardUrl(task.projectId, task.id),
+  }
+}
+
+/**
+ * Apply one settings patch. Absent fields keep their stored value; `clear`
+ * flags win over a simultaneous value, and an empty string clears a field.
+ */
+function patchSettings(
+  base: TeambitionHostSettings,
+  request: TeambitionConfigRequest,
+): TeambitionHostSettings {
+  let cookie = base.cookie
+  if (request.clearCookie === true) cookie = undefined
+  else if (request.cookie !== undefined) cookie = nonEmpty(request.cookie)
+  let operatorId = base.operatorId
+  if (request.clearOperatorId === true) operatorId = undefined
+  else if (request.operatorId !== undefined) operatorId = nonEmpty(request.operatorId)
+  const apiBase = request.apiBase ?? base.apiBase
+  let defaultWorkspaceId = base.defaultWorkspaceId
+  if (request.defaultWorkspaceId !== undefined) {
+    defaultWorkspaceId = request.defaultWorkspaceId === null ? undefined : nonEmpty(request.defaultWorkspaceId)
+  }
+  const projectBindings = request.projectBindings === undefined
+    ? base.projectBindings
+    : normalizeSettings({ projectBindings: request.projectBindings }).projectBindings
+  const cardBindings = request.cardBindings === undefined
+    ? base.cardBindings
+    : normalizeSettings({ cardBindings: request.cardBindings }).cardBindings
+  return {
+    ...(cookie === undefined ? {} : { cookie }),
+    ...(operatorId === undefined ? {} : { operatorId }),
+    apiBase,
+    ...(defaultWorkspaceId === undefined ? {} : { defaultWorkspaceId }),
+    projectBindings,
+    cardBindings,
+  }
+}
+
+/** Trimmed non-empty string, else undefined. */
+function nonEmpty(value: string): string | undefined {
+  const text = value.trim()
+  return text === '' ? undefined : text
+}
+
+/** Redacted message of an unknown failure. */
+function describe(error: unknown): string {
+  if (error instanceof TeambitionApiError) return redactMessage(error.message)
+  if (error instanceof Error) return redactMessage(error.message)
+  return redactMessage(String(error))
+}
