@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeambitionApiFace, TeambitionApiResult } from '../src/client/api.ts'
 import type { SessionsFace, UiWorkspaceFace, WorkspacesFace } from '../src/client/faces.ts'
 import { zh } from '../src/client/locales.ts'
-import { SELECTION_STORAGE_KEY, TeambitionPanel, type TeambitionPanelProps } from '../src/client/panel.tsx'
+import { SELECTION_STORAGE_KEY, TASK_VIEW_STORAGE_KEY, TeambitionPanel, type TeambitionPanelProps } from '../src/client/panel.tsx'
 import type {
   TeambitionProjectDetail,
   TeambitionSettingsView,
@@ -50,12 +50,21 @@ const DETAIL: TeambitionProjectDetail = {
     projectId: 'p1',
     projectName: '阿波罗计划',
     title: '接入登录接口',
+    note: '对接统一登录，先覆盖账号密码。',
     stageId: 's1',
     tasklistId: 'l1',
     statusId: 'st2',
     url: 'https://www.teambition.com/project/p1/tasks/t1',
     workspaceId: 'ws-1',
     workspaceSource: 'card',
+    uniqueId: 79,
+    executorId: 'u1',
+    executorName: '安阳',
+    dueAt: Date.parse('2026-10-24T00:00:00Z'),
+    createdAt: Date.parse('2026-10-01T02:00:00Z'),
+    subtaskCount: 2,
+    commentsCount: 3,
+    priority: 1,
   }],
 }
 
@@ -90,6 +99,44 @@ const DETAIL_L2: TeambitionProjectDetail = {
   ...DETAIL_ALL,
   stages: DETAIL_ALL.stages.filter(stage => stage.tasklistId === 'l2'),
   cards: DETAIL_ALL.cards.filter(card => card.tasklistId === 'l2'),
+}
+
+/**
+ * Three cards with aligned/animated execution state for the task module: one
+ * open task with executor and due date, one finished task, one overdue task
+ * without an executor.
+ */
+const DETAIL_TASKS: TeambitionProjectDetail = {
+  ...DETAIL,
+  cards: [
+    DETAIL.cards[0],
+    {
+      id: 't2',
+      projectId: 'p1',
+      projectName: '阿波罗计划',
+      title: '修复登录超时',
+      stageId: 's2',
+      tasklistId: 'l1',
+      isDone: true,
+      updatedAt: Date.parse('2026-10-20T03:00:00Z'),
+      createdAt: Date.parse('2026-10-02T03:00:00Z'),
+      url: 'https://www.teambition.com/project/p1/tasks/t2',
+      uniqueId: 80,
+      priority: -10,
+    },
+    {
+      id: 't3',
+      projectId: 'p1',
+      projectName: '阿波罗计划',
+      title: '补充埋点',
+      stageId: 's1',
+      tasklistId: 'l1',
+      updatedAt: Date.parse('2026-10-19T03:00:00Z'),
+      dueAt: Date.parse('2026-09-01T00:00:00Z'),
+      url: 'https://www.teambition.com/project/p1/tasks/t3',
+      uniqueId: 81,
+    },
+  ],
 }
 
 const DIAGNOSTICS: TeambitionDiagnostics = {
@@ -177,6 +224,20 @@ async function until(check: () => boolean, what: string): Promise<void> {
   throw new Error(`timed out waiting for ${what}`)
 }
 
+/** The view switch tab with the given label. */
+function viewTab(scope: ParentNode, label: string): HTMLButtonElement | undefined {
+  return [...scope.querySelectorAll('[data-dsh-part="view-switch"] button')]
+    .find(button => button.textContent?.trim() === label) as HTMLButtonElement | undefined
+}
+
+/** Mount the panel and switch from the default task view to the board view. */
+async function mountOnBoard(props: TeambitionPanelProps): Promise<HTMLElement> {
+  const container = await mount(props)
+  await until(() => viewTab(container, zh['view.board']) !== undefined, 'the view switch')
+  await click(viewTab(container, zh['view.board']) as HTMLButtonElement)
+  return container
+}
+
 /** The first button whose trimmed text is exactly `text`. */
 function buttonByText(scope: ParentNode, text: string): HTMLButtonElement | undefined {
   return [...scope.querySelectorAll('button')].find(button => button.textContent?.trim() === text)
@@ -211,7 +272,7 @@ function tasklistPicker(scope: ParentNode): HTMLSelectElement {
 describe('TeambitionPanel', () => {
   it('renders the board with the project columns, cards and workspace chips', async () => {
     const h = harness()
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
 
     await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
 
@@ -246,7 +307,7 @@ describe('TeambitionPanel', () => {
       cards: [{ ...DETAIL.cards[0], workspaceId: undefined, workspaceSource: undefined }],
     }
     const h = harness(stateView({ defaultWorkspaceId: undefined }), unbound)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
 
     const card = container.querySelector('[data-dsh-part="card"]') as HTMLElement
@@ -256,7 +317,7 @@ describe('TeambitionPanel', () => {
 
   it('runs a card in its bound workspace: create, retain, prompt, release, open', async () => {
     const h = harness()
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
 
     const card = container.querySelector('[data-dsh-part="card"]') as HTMLElement
@@ -281,7 +342,7 @@ describe('TeambitionPanel', () => {
 
   it('shows the settings surface with the cookie setup hint when unconfigured', async () => {
     const h = harness(stateView({ configured: false, defaultWorkspaceId: undefined }))
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="connection"]') !== null, 'the header')
 
     expect(container.querySelector('[data-dsh-part="connection"]')?.textContent).toBe(zh['connection.unconfigured'])
@@ -300,7 +361,7 @@ describe('TeambitionPanel', () => {
   it('shows the empty-project hint instead of an empty board', async () => {
     const empty: TeambitionProjectDetail = { ...DETAIL, cards: [] }
     const h = harness(stateView(), empty)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="board"]') !== null, 'the board')
 
     expect(container.querySelectorAll('[data-dsh-part="card"]')).toHaveLength(0)
@@ -310,7 +371,7 @@ describe('TeambitionPanel', () => {
 
   it('drops the rendered diagnose verdict once the cookie is cleared', async () => {
     const h = harness()
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="connection"]') !== null, 'the header')
 
     await click(buttonByText(container, zh['header.settings']) as HTMLButtonElement)
@@ -332,7 +393,7 @@ describe('TeambitionPanel', () => {
 describe('TeambitionPanel task lists', () => {
   it('groups the all-lists board by task list and offers every list in the picker', async () => {
     const h = harness(stateView(), DETAIL_ALL)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="tasklist-group"]') !== null, 'the task list groups')
 
     // "All task lists" is the default: every list gets its own board.
@@ -362,7 +423,7 @@ describe('TeambitionPanel task lists', () => {
 
   it('reads the selected task list and remembers it for the next visit', async () => {
     const h = harness(stateView(), DETAIL_ALL)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="tasklist-picker"]') !== null, 'the task list picker')
 
     await act(async () => { pickOption(tasklistPicker(container), 'l2') })
@@ -378,7 +439,7 @@ describe('TeambitionPanel task lists', () => {
   it('restores the remembered project and task list selection on mount', async () => {
     localStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify({ projectId: 'p1', tasklistId: 'l2' }))
     const h = harness(stateView(), DETAIL_ALL)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
 
     await until(() => h.fetchProject.mock.calls.some(call => call[1] === 'l2'), 'the task-list read')
     expect(h.fetchProject).toHaveBeenCalledWith('p1', 'l2')
@@ -388,7 +449,7 @@ describe('TeambitionPanel task lists', () => {
   it('drops a remembered task list the project no longer has', async () => {
     localStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify({ projectId: 'p1', tasklistId: 'gone' }))
     const h = harness(stateView(), DETAIL_ALL)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
 
     await until(() => {
       const picker = tasklistPicker(container)
@@ -400,7 +461,7 @@ describe('TeambitionPanel task lists', () => {
 
   it('creates a card in the selected task list and its column', async () => {
     const h = harness(stateView(), DETAIL_ALL)
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="tasklist-picker"]') !== null, 'the task list picker')
 
     // The host filters the payload by task list: emulate that on the second read.
@@ -427,7 +488,7 @@ describe('TeambitionPanel task lists', () => {
 
   it('shows the enhanced empty-project hint with the Teambition link', async () => {
     const h = harness(stateView(), { ...DETAIL, cards: [] })
-    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
     await until(() => container.querySelector('[data-dsh-part="board-empty"]') !== null, 'the empty hint')
 
     const empty = container.querySelector('[data-dsh-part="board-empty"]') as HTMLElement
@@ -437,5 +498,152 @@ describe('TeambitionPanel task lists', () => {
     expect(link.getAttribute('href')).toBe('https://www.teambition.com/project/p1/board')
     expect(link.getAttribute('target')).toBe('_blank')
     expect(link.textContent).toBe(zh['board.openProject'])
+  })
+})
+
+describe('TeambitionPanel task module', () => {
+  const mountTasks = async (detail: TeambitionProjectDetail = DETAIL_TASKS) => {
+    const h = harness(stateView(), detail)
+    const container = await mount({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="task-row"]') !== null, 'the task rows')
+    return { h, container }
+  }
+
+  const rows = (container: ParentNode): HTMLElement[] =>
+    [...container.querySelectorAll('[data-dsh-part="task-row"]')] as HTMLElement[]
+
+  const toolbarSelects = (container: ParentNode): HTMLSelectElement[] =>
+    [...container.querySelectorAll('[data-dsh-part="task-toolbar"] select')] as HTMLSelectElement[]
+
+  it('renders the task table by default with executor, priority, due and counters', async () => {
+    const { container } = await mountTasks()
+
+    expect(container.querySelector('[data-dsh-part="task-table"]')).not.toBeNull()
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+    expect(rows(container)).toHaveLength(3)
+    expect(container.querySelector('[data-dsh-part="task-count"]')?.textContent).toBe(
+      zh['toolbar.count'].replace('{shown}', '3').replace('{total}', '3'),
+    )
+
+    // Newest first by default: t2 (10-20), t3 (10-19), t1 (no update).
+    expect(rows(container)[0].textContent).toContain('修复登录超时')
+    expect(rows(container)[0].getAttribute('data-done')).toBe('true')
+
+    const legacy = rows(container)[2]
+    expect(legacy.textContent).toContain('接入登录接口')
+    expect(legacy.textContent).toContain('#79')
+    expect(legacy.textContent).toContain('安阳')
+    expect(legacy.textContent).toContain(zh['tasks.priorityVeryUrgent'])
+    expect(legacy.textContent).toContain(zh['tasks.subtasks'].replace('{count}', '2'))
+    expect(legacy.textContent).toContain(zh['tasks.comments'].replace('{count}', '3'))
+
+    const overdue = rows(container)[1]
+    expect(overdue.getAttribute('data-overdue')).toBe('true')
+    expect(overdue.textContent).toContain(zh['tasks.overdue'])
+    expect(overdue.textContent).toContain(zh['tasks.unassigned'])
+  })
+
+  it('filters the table by the search query', async () => {
+    const { container } = await mountTasks()
+    const search = container.querySelector('[data-dsh-part="task-toolbar"] input[type="search"]') as HTMLInputElement
+    await act(async () => { typeInto(search, '登录') })
+
+    expect(rows(container)).toHaveLength(2)
+    expect(container.textContent).toContain('接入登录接口')
+    expect(container.textContent).toContain('修复登录超时')
+    expect(container.textContent).not.toContain('补充埋点')
+  })
+
+  it('filters by open state, overdue state and missing executor', async () => {
+    const { container } = await mountTasks()
+    const [, filter] = toolbarSelects(container)
+
+    await act(async () => { pickOption(filter, 'done') })
+    expect(rows(container)).toHaveLength(1)
+    expect(rows(container)[0].textContent).toContain('修复登录超时')
+
+    await act(async () => { pickOption(filter, 'overdue') })
+    expect(rows(container)).toHaveLength(1)
+    expect(rows(container)[0].getAttribute('data-overdue')).toBe('true')
+
+    await act(async () => { pickOption(filter, 'unassigned') })
+    // Both t2 and t3 have no executor, so both are unassigned.
+    expect(rows(container)).toHaveLength(2)
+    expect(rows(container).map(row => row.textContent).join(' ')).toContain('补充埋点')
+
+    await act(async () => { pickOption(filter, 'all') })
+    expect(rows(container)).toHaveLength(3)
+  })
+
+  it('groups rows by stage and by executor', async () => {
+    const { container } = await mountTasks()
+    const [group] = toolbarSelects(container)
+
+    await act(async () => { pickOption(group, 'stage') })
+    const stageGroups = [...container.querySelectorAll('[data-dsh-part="task-group"]')]
+    expect(stageGroups).toHaveLength(2)
+    expect(stageGroups[0].textContent).toContain('待办')
+    expect(stageGroups[1].textContent).toContain('进行中')
+
+    await act(async () => { pickOption(group, 'executor') })
+    const executorGroups = [...container.querySelectorAll('[data-dsh-part="task-group"]')]
+    expect(executorGroups).toHaveLength(2)
+    expect(executorGroups.some(groupElement => groupElement.textContent?.includes('安阳'))).toBe(true)
+    expect(executorGroups.some(groupElement => groupElement.textContent?.includes(zh['tasks.groupNobody']))).toBe(true)
+  })
+
+  it('sorts by due date so the earliest due date comes first', async () => {
+    const { container } = await mountTasks()
+    const [, , sort] = toolbarSelects(container)
+
+    await act(async () => { pickOption(sort, 'due') })
+    expect(rows(container)[0].textContent).toContain('补充埋点')
+  })
+
+  it('opens the detail drawer and runs the task from it', async () => {
+    const { h, container } = await mountTasks()
+    const legacy = rows(container)[2]
+    await act(async () => { legacy.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    const drawer = container.querySelector('[data-dsh-part="task-detail"]') as HTMLElement
+    expect(drawer).not.toBeNull()
+    expect(drawer.textContent).toContain('接入登录接口')
+    expect(drawer.textContent).toContain('#79')
+    expect(drawer.textContent).toContain('安阳')
+    expect(drawer.textContent).toContain(zh['detail.note'])
+    expect(drawer.textContent).toContain('对接统一登录，先覆盖账号密码。')
+
+    const run = buttonByText(drawer, zh['card.run'])
+    expect(run).toBeDefined()
+    await click(run as HTMLButtonElement)
+    await until(() => h.openSession.mock.calls.length > 0, 'the created session to open')
+    expect(h.create.mock.calls[0][0]).toEqual({ workspaceId: 'ws-1' })
+    const blocks = h.prompt.mock.calls[0][0] as Array<{ type: string; text: string }>
+    expect(blocks[0].text).toContain('接入登录接口')
+
+    await click(buttonByText(drawer, zh['detail.close']) as HTMLButtonElement)
+    expect(container.querySelector('[data-dsh-part="task-detail"]')).toBeNull()
+  })
+
+  it('remembers the task view settings for the next visit', async () => {
+    const { container } = await mountTasks()
+    const [group, filter, sort] = toolbarSelects(container)
+    await act(async () => { pickOption(group, 'stage') })
+    await act(async () => { pickOption(filter, 'open') })
+    await act(async () => { pickOption(sort, 'priority') })
+
+    expect(JSON.parse(localStorage.getItem(TASK_VIEW_STORAGE_KEY) ?? '{}')).toEqual({
+      groupBy: 'stage',
+      filterBy: 'open',
+      sortBy: 'priority',
+    })
+  })
+
+  it('restores the remembered task view settings on mount', async () => {
+    localStorage.setItem(TASK_VIEW_STORAGE_KEY, JSON.stringify({ groupBy: 'stage', filterBy: 'open', sortBy: 'updated' }))
+    const { container } = await mountTasks()
+    expect(rows(container)).toHaveLength(2)
+    // Both remaining open tasks sit in the same column.
+    expect(container.querySelectorAll('[data-dsh-part="task-group"]')).toHaveLength(1)
   })
 })

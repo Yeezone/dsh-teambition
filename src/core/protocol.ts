@@ -123,6 +123,24 @@ export interface TeambitionCardView {
   /** Remote `updated` instant in ms. */
   readonly updatedAt?: number
   readonly priority?: number
+  /** Human task number Teambition shows next to the title. */
+  readonly uniqueId?: number
+  /** Executor user id. */
+  readonly executorId?: string
+  /** Executor display name. */
+  readonly executorName?: string
+  /** Executor avatar URL. */
+  readonly executorAvatarUrl?: string
+  /** Due date instant in ms (the task module renders overdue states from it). */
+  readonly dueAt?: number
+  /** Due date as returned by the API (ISO string). */
+  readonly dueAtRaw?: string
+  /** `created` instant in ms. */
+  readonly createdAt?: number
+  /** Subtask count. */
+  readonly subtaskCount?: number
+  /** Comment count. */
+  readonly commentsCount?: number
   /** DSH workspace this card executes in (card > project > default). */
   readonly workspaceId?: string
   /** Where this binding came from, so the panel can explain it. */
