@@ -292,6 +292,22 @@
   border-color: var(--dsw-alias-brand-primary);
 }
 
+/* Drag and drop: the card is the drag source, the column is the drop target. */
+.card[draggable='true'] {
+  cursor: grab;
+}
+
+.card[data-dragging='true'] {
+  cursor: grabbing;
+  opacity: 0.45;
+}
+
+.column[data-drop-target='true'] {
+  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-1, transparent));
+  box-shadow: 0 0 0 2px var(--dsw-alias-brand-primary) inset;
+}
+
 .cardTitle {
   margin: 0;
   font-size: 13px;

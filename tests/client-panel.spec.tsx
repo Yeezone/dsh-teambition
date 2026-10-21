@@ -625,6 +625,90 @@ describe('TeambitionPanel quick add and moves', () => {
   })
 })
 
+/** A minimal DataTransfer stand-in: jsdom has no DataTransfer constructor. */
+function fakeDataTransfer(): DataTransfer {
+  const store = new Map<string, string>()
+  return {
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    setData: (format: string, value: string) => { store.set(format, value) },
+    getData: (format: string) => store.get(format) ?? '',
+    clearData: () => { store.clear() },
+  } as unknown as DataTransfer
+}
+
+/** Dispatch one drag event carrying `dataTransfer`, like a browser would. */
+async function drag(target: HTMLElement, type: string, dataTransfer: DataTransfer): Promise<void> {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer?: DataTransfer }
+  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer, configurable: true })
+  await act(async () => { target.dispatchEvent(event) })
+}
+
+describe('TeambitionPanel drag and drop', () => {
+  it('moves a dragged card into another stage column', async () => {
+    const h = harness()
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
+
+    const card = container.querySelector('[data-dsh-part="card"][data-card-id="t1"]') as HTMLElement
+    const target = boardColumns(container).find(column => column.dataset.columnId === 's2') as HTMLElement
+    expect(card.getAttribute('draggable')).toBe('true')
+    expect(target.getAttribute('data-drop-target')).toBe('false')
+
+    const dataTransfer = fakeDataTransfer()
+    await drag(card, 'dragstart', dataTransfer)
+    expect(card.getAttribute('data-dragging')).toBe('true')
+    expect(dataTransfer.getData('text/plain')).toBe('t1')
+
+    await drag(target, 'dragover', dataTransfer)
+    expect(target.getAttribute('data-drop-target')).toBe('true')
+
+    await drag(target, 'drop', dataTransfer)
+    await until(() => h.setTaskStage.mock.calls.length > 0, 'the stage move')
+
+    expect(h.setTaskStage.mock.calls[0][0]).toEqual({ taskId: 't1', stageId: 's2' })
+    expect(h.setTaskStatus).not.toHaveBeenCalled()
+    expect(card.getAttribute('data-dragging')).toBe('false')
+    expect(target.getAttribute('data-drop-target')).toBe('false')
+  })
+
+  it('moves a dragged card into a workflow status column', async () => {
+    const h = harness(stateView(), DETAIL_STATUS)
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="board"]')?.getAttribute('data-view-vertical') === 'status', 'the status board')
+
+    const card = container.querySelector('[data-dsh-part="card"][data-card-id="t1"]') as HTMLElement
+    const target = boardColumns(container).find(column => column.dataset.columnId === 'st3') as HTMLElement
+    const dataTransfer = fakeDataTransfer()
+    await drag(card, 'dragstart', dataTransfer)
+    await drag(target, 'dragover', dataTransfer)
+    await drag(target, 'drop', dataTransfer)
+    await until(() => h.setTaskStatus.mock.calls.length > 0, 'the status move')
+
+    expect(h.setTaskStatus.mock.calls[0][0]).toEqual({ taskId: 't1', statusId: 'st3' })
+    expect(h.setTaskStage).not.toHaveBeenCalled()
+  })
+
+  it('drops a card back onto its own column without a write', async () => {
+    const h = harness()
+    const container = await mountOnBoard({ sessions: h.sessions, workspaces: h.workspaces, uiWorkspace: h.uiWorkspace, api: h.api })
+    await until(() => container.querySelector('[data-dsh-part="card"]') !== null, 'the card board')
+
+    const card = container.querySelector('[data-dsh-part="card"][data-card-id="t1"]') as HTMLElement
+    const own = boardColumns(container).find(column => column.dataset.columnId === 's1') as HTMLElement
+    const dataTransfer = fakeDataTransfer()
+    await drag(card, 'dragstart', dataTransfer)
+    await drag(own, 'dragover', dataTransfer)
+    // The card's own column is never a drop target.
+    expect(own.getAttribute('data-drop-target')).toBe('false')
+    await drag(own, 'drop', dataTransfer)
+    await act(async () => { await Promise.resolve() })
+
+    expect(h.setTaskStage).not.toHaveBeenCalled()
+    expect(h.setTaskStatus).not.toHaveBeenCalled()
+  })
+})
+
 describe('TeambitionPanel task lists', () => {
   it('groups the all-lists board by task list and offers every list in the picker', async () => {
     const h = harness(stateView(), DETAIL_ALL)

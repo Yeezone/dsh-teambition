@@ -698,10 +698,10 @@ export class TeambitionClient {
    * @param statusId - target `taskflowstatusId`.
    */
   async updateTaskStatus(taskId: string, statusId: string): Promise<void> {
-    const body = JSON.stringify({ taskflowstatusId: statusId })
     const failures: string[] = []
     for (const endpoint of this.ordered(taskStatusUpdateCandidates(taskId))) {
       try {
+        const body = JSON.stringify(isLegacyStatusRoute(endpoint) ? { _taskflowstatusId: statusId } : { taskflowstatusId: statusId })
         await this.send(endpointUrl(endpoint), 'PUT', body)
         return
       } catch (error) {
@@ -718,7 +718,8 @@ export class TeambitionClient {
   /**
    * Write one task's kanban stage.
    *
-   * The legacy task resource takes `_stageId`; the v3 route takes `stageId`.
+   * The web client moves a card with `PUT /api/tasks/{id}/stage/move`; the v3
+   * route takes `stageId`, and the legacy task resource `_stageId`.
    * @param taskId - remote task id.
    * @param stageId - target `stageId`.
    */
@@ -726,8 +727,7 @@ export class TeambitionClient {
     const failures: string[] = []
     for (const endpoint of this.ordered(taskStageUpdateCandidates(taskId))) {
       try {
-        const body = JSON.stringify(isLegacyTaskRoute(endpoint) ? { _stageId: stageId } : { stageId })
-        await this.send(endpointUrl(endpoint), 'PUT', body)
+        await this.send(endpointUrl(endpoint), 'PUT', stageUpdateBody(endpoint, stageId))
         return
       } catch (error) {
         failures.push(`${endpoint.base}:${endpoint.path} -> ${redactMessage(messageOf(error), this.cookie)}`)
@@ -741,6 +741,19 @@ export class TeambitionClient {
 /** Whether a candidate is the legacy `/tasks[/{id}]` route rather than v3. */
 function isLegacyTaskRoute(endpoint: TeambitionEndpoint): boolean {
   return endpoint.base === 'web' && /^\/tasks(\/|$)/.test(endpoint.path)
+}
+
+/** Whether a candidate is the legacy `/tasks/{id}/taskflowstatus` route. */
+function isLegacyStatusRoute(endpoint: TeambitionEndpoint): boolean {
+  return endpoint.base === 'web' && /^\/tasks\/[^/]+\/taskflowstatus$/.test(endpoint.path)
+}
+
+/** Serialize the stage-move body the addressed endpoint expects. */
+function stageUpdateBody(endpoint: TeambitionEndpoint, stageId: string): string {
+  if (endpoint.base === 'web' && /^\/tasks\/[^/]+\/stage\/move$/.test(endpoint.path)) {
+    return JSON.stringify({ stageId, preTaskId: null, nextTaskId: null })
+  }
+  return JSON.stringify(isLegacyTaskRoute(endpoint) ? { _stageId: stageId } : { stageId })
 }
 
 /** Read the kanban stages out of a stage-list payload. */
