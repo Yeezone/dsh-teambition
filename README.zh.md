@@ -40,6 +40,10 @@ dsh plugin --profile desktop add link:<本仓库路径>
 bundle patch（`cordis.patch.yml`）会插入 `ui-teambition` 行，profile 启动时两个
 半区一起挂载。必须重启桌面应用：只有组合里出现新行，浏览器半区才会加载。
 
+如果 profile 由打包应用托管（桌面版的 `desktop` profile），CLI 会拒绝写入：请在 GUI 的
+「插件」页安装，或手动把依赖和 `dsh.profile.bundles` 行写进该 profile 的 `package.json`，
+然后重启应用。
+
 ## 数据与隐私
 
 - Host 状态：`$DSH_HOME/teambition/config.json`（`0600`），保存 Cookie、operator

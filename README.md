@@ -47,6 +47,11 @@ The bundle patch (`cordis.patch.yml`) inserts the `ui-teambition` row, so the
 profile boot mounts both halves. Restarting the desktop app is required: the
 browser half only loads when the composition includes the new row.
 
+If the profile is app-owned (the packaged desktop app's `desktop`
+profile), the CLI refuses to write it: register the package from the GUI Plugins
+page, or add the dependency and the `dsh.profile.bundles` row to the profile's
+`package.json` manually, then restart.
+
 ## Data and privacy
 
 - Host state: `$DSH_HOME/teambition/config.json` (mode `0600`), holding the
