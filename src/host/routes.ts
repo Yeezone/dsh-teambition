@@ -229,9 +229,11 @@ export function registerTeambitionRoutes(ctx: Context, service: TeambitionServic
           const record = requireObject(payload)
           const projectId = requiredString(record, 'projectId')
           const tasklistId = optionalString(record, 'tasklistId')
+          const viewId = optionalString(record, 'viewId')
           return valid(await service.projectDetail({
             projectId,
             ...(tasklistId === undefined ? {} : { tasklistId }),
+            ...(viewId === undefined ? {} : { viewId }),
           }))
         }
         case ROUTES.taskCreate: {
@@ -242,6 +244,7 @@ export function registerTeambitionRoutes(ctx: Context, service: TeambitionServic
           const tasklistId = optionalString(record, 'tasklistId')
           const stageId = optionalString(record, 'stageId')
           const statusId = optionalString(record, 'statusId')
+          const scenarioConfigId = optionalString(record, 'scenarioConfigId')
           const executorId = optionalString(record, 'executorId')
           return valid(await service.createTask({
             projectId,
@@ -250,6 +253,7 @@ export function registerTeambitionRoutes(ctx: Context, service: TeambitionServic
             ...(tasklistId === undefined ? {} : { tasklistId }),
             ...(stageId === undefined ? {} : { stageId }),
             ...(statusId === undefined ? {} : { statusId }),
+            ...(scenarioConfigId === undefined ? {} : { scenarioConfigId }),
             ...(executorId === undefined ? {} : { executorId }),
           }))
         }

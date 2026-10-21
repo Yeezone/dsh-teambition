@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { TeambitionDiagnostics, TeambitionEndpoint, TeambitionProject, TeambitionTask, TeambitionTasklist, TeambitionWorkflowStatus } from '../src/core/teambition/index.ts'
 import { cardUrl } from '../src/core/protocol.ts'
-import { TeambitionApiError } from '../src/host/client.ts'
+import { TeambitionApiError, type TeambitionScenarioConfig, type TeambitionView, type TeambitionWorkflow } from '../src/host/client.ts'
 import { TeambitionConfigStore, type TeambitionHostState } from '../src/host/config-store.ts'
 import {
   createTeambitionService,
@@ -34,7 +34,7 @@ const TASKLISTS: readonly TeambitionTasklist[] = [{ id: 'tl1', name: 'List One' 
 const STAGES = [{ id: 's1', name: 'Todo', pos: 0 }]
 const STATUSES: readonly TeambitionWorkflowStatus[] = [{ id: 'st1', name: 'Doing', kind: 'start', pos: 0 }]
 const TASKS: readonly TeambitionTask[] = [
-  { id: 't1', projectId: 'p1', title: 'First', stageId: 's1', statusId: 'st1', updatedAt: 99 },
+  { id: 't1', projectId: 'p1', title: 'First', stageId: 's1', statusId: 'st1', scenarioConfigId: 'sc1', updatedAt: 99 },
   { id: 't2', projectId: 'p1', title: 'Second' },
   { id: 't3', projectId: 'p2', title: 'Third' },
 ]
@@ -56,6 +56,25 @@ const TWO_LIST_TASKS: readonly TeambitionTask[] = [
   { id: 't3', projectId: 'p1', title: 'Orphan' },
 ]
 
+/** Workflow statuses of the workflow project, ordered as Teambition orders them. */
+const WORKFLOWS: readonly TeambitionWorkflow[] = [
+  {
+    id: 'wf1',
+    name: 'Default workflow',
+    statuses: [
+      { id: 'st1', name: 'Doing', kind: 'start', pos: 0 },
+      { id: 'st2', name: 'Done', kind: 'end', pos: 1 },
+    ],
+  },
+]
+const TASK_TYPES: readonly TeambitionScenarioConfig[] = [
+  { id: 'sc1', name: 'Task', taskflowId: 'wf1', statusIds: ['st1', 'st2'] },
+]
+const VIEWS: readonly TeambitionView[] = [
+  { id: 'v-stage', name: 'Stage board', vertical: 'stage', scenarioConfigIds: [], isDefault: true },
+  { id: 'v-status', name: 'Status board', vertical: 'status', scenarioConfigIds: ['sc1'] },
+]
+
 let root: string
 let store: TeambitionConfigStore
 let calls: { listProjects: number; updateTaskStatus: string[][]; updateTaskStage: string[][]; createTask: unknown[] }
@@ -70,6 +89,9 @@ function createFakeClient(overrides: Partial<TeambitionClientPort> = {}): Teambi
     projectTasks: async () => TASKS,
     projectStages: async () => STAGES,
     projectTasklists: async () => TASKLISTS,
+    projectWorkflows: async () => WORKFLOWS,
+    projectScenarioConfigs: async () => TASK_TYPES,
+    projectViews: async () => VIEWS,
     updateTaskStatus: async (taskId, statusId) => { calls.updateTaskStatus.push([taskId, statusId]) },
     updateTaskStage: async (taskId, stageId) => { calls.updateTaskStage.push([taskId, stageId]) },
     createTask: async input => { calls.createTask.push(input); return { taskId: 't-new' } },
@@ -211,10 +233,25 @@ describe('projectDetail', () => {
     expect(detail.tasklists).toEqual(TASKLISTS)
     expect(detail.stages).toEqual([{ id: 's1', name: 'Todo', pos: 0, tasklistId: 'tl1' }])
     expect(detail.statuses).toEqual(STATUSES)
+    expect(detail.views).toEqual(VIEWS)
+    expect(detail.workflows).toEqual([
+      {
+        id: 'wf1',
+        name: 'Default workflow',
+        statuses: [
+          { id: 'st1', name: 'Doing', kind: 'start', pos: 0 },
+          { id: 'st2', name: 'Done', kind: 'end', pos: 1 },
+        ],
+      },
+    ])
+    expect(detail.scenarioConfigs).toEqual([{ id: 'sc1', name: 'Task', taskflowId: 'wf1', statusIds: ['st1', 'st2'] }])
+    expect(detail.viewId).toBe('v-stage')
+    expect(detail.columns).toEqual([{ id: 's1', name: 'Todo', kind: 'stage', pos: 0, tasklistId: 'tl1' }])
     expect(detail.cards).toHaveLength(3)
     expect(detail.cards.every(card => card.tasklistId === 'tl1')).toBe(true)
     const [first, second, third] = detail.cards
     expect(first).toMatchObject({ id: 't1', projectName: 'Project One', workspaceId: 'ws-project', workspaceSource: 'project' })
+    expect(first?.scenarioConfigId).toBe('sc1')
     expect(first?.url).toBe(cardUrl('p1', 't1'))
     expect(second).toMatchObject({ id: 't2', workspaceId: 'ws-card', workspaceSource: 'card' })
     expect(third).toMatchObject({ id: 't3', workspaceId: 'ws-default', workspaceSource: 'default' })
@@ -263,6 +300,132 @@ describe('projectDetail', () => {
     expect(detail.stages.find(stage => stage.id === 's3')?.tasklistId).toBeUndefined()
     expect(detail.cards.find(card => card.id === 't3')?.tasklistId).toBeUndefined()
   })
+
+  it('renders the kanban stages as columns for a stage view', async () => {
+    const service = createService(createFakeClient({
+      projectViews: async () => [{ id: 'v-stage', name: 'Stage board', vertical: 'stage', scenarioConfigIds: [] }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.viewId).toBe('v-stage')
+    expect(detail.columns).toEqual([{ id: 's1', name: 'Todo', kind: 'stage', pos: 0, tasklistId: 'tl1' }])
+  })
+
+  it('renders the requested view instead of the default one', async () => {
+    const service = createService(createFakeClient({
+      projectViews: async () => [
+        { id: 'v-other', name: 'Other', vertical: 'status', scenarioConfigIds: ['sc1'], isDefault: true },
+        { id: 'v-done-first', name: 'Done first', vertical: 'status', scenarioConfigIds: ['sc1'] },
+      ],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1', viewId: 'v-done-first' })
+    expect(detail.viewId).toBe('v-done-first')
+    expect(detail.columns.map(column => column.id)).toEqual(['st1', 'st2'])
+  })
+
+  it('falls back to the default view when the requested one is unknown', async () => {
+    const service = createService(createFakeClient())
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1', viewId: 'missing' })
+    expect(detail.viewId).toBe('v-stage')
+  })
+
+  it('deduplicates statuses shared by several task types', async () => {
+    const service = createService(createFakeClient({
+      projectScenarioConfigs: async () => [
+        { id: 'sc1', name: 'Task', taskflowId: 'wf1', statusIds: ['st1', 'st2'] },
+        { id: 'sc2', name: 'Bug', taskflowId: 'wf1', statusIds: ['st1', 'st2'] },
+      ],
+      projectViews: async () => [{ id: 'v-all', name: 'All', vertical: 'status', scenarioConfigIds: ['sc1', 'sc2'], isDefault: true }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.columns.map(column => column.id)).toEqual(['st1', 'st2'])
+  })
+
+  it('narrows stage columns to the requested task list', async () => {
+    const service = createService(createFakeClient({
+      projectTasklists: async () => TWO_TASKLISTS,
+      projectStages: async () => TWO_LIST_STAGES,
+      projectTasks: async () => TWO_LIST_TASKS,
+      projectViews: async () => [{ id: 'v-stage', name: 'Stage board', vertical: 'stage', scenarioConfigIds: [] }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1', tasklistId: 'tl2' })
+    expect(detail.columns).toEqual([{ id: 's2', name: 'Review', kind: 'stage', pos: 0, tasklistId: 'tl2' }])
+  })
+
+  it('degrades to the workflow statuses when a status view names no readable task type', async () => {
+    const service = createService(createFakeClient({
+      projectScenarioConfigs: async () => [],
+      projectViews: async () => [{ id: 'v-empty', name: 'Empty', vertical: 'status', scenarioConfigIds: ['sc-missing'], isDefault: true }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.columns).toEqual([
+      { id: 'st1', name: 'Doing', kind: 'status', pos: 0 },
+      { id: 'st2', name: 'Done', kind: 'status', pos: 1 },
+    ])
+  })
+
+  it('renders the workflow statuses for a status view without task types', async () => {
+    const service = createService(createFakeClient({
+      projectViews: async () => [{ id: 'v-version', name: 'Version board', vertical: 'status', scenarioConfigIds: [], isDefault: true }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.columns.map(column => column.id)).toEqual(['st1', 'st2'])
+    // Without task types there is nothing to narrow the cards to.
+    expect(detail.cards.map(card => card.id)).toEqual(['t1', 't2', 't3'])
+  })
+
+  it('applies the executor clause of the selected view to the cards', async () => {
+    const service = createService(createFakeClient({
+      projectTasks: async () => [
+        { id: 't1', projectId: 'p1', title: 'Mine', executorId: 'u1' },
+        { id: 't2', projectId: 'p1', title: 'Theirs', executorId: 'u2' },
+        { id: 't3', projectId: 'p1', title: 'Unassigned' },
+      ],
+      projectViews: async () => [
+        { id: 'v-mine', name: 'My tasks', vertical: 'stage', scenarioConfigIds: [], filter: '_executorId = u1 ORDER BY created DESC', isDefault: true },
+      ],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.cards.map(card => card.id)).toEqual(['t1'])
+    expect(detail.columns).toEqual([{ id: 's1', name: 'Todo', kind: 'stage', pos: 0, tasklistId: 'tl1' }])
+  })
+
+  it('applies a creator clause to the cards as well', async () => {
+    const service = createService(createFakeClient({
+      projectTasks: async () => [
+        { id: 't1', projectId: 'p1', title: 'Mine', creatorId: 'u1' },
+        { id: 't2', projectId: 'p1', title: 'Theirs', creatorId: 'u2' },
+      ],
+      projectViews: async () => [
+        { id: 'v-created', name: 'Created by me', vertical: 'stage', scenarioConfigIds: [], filter: '_creatorId = u1 ORDER BY created DESC', isDefault: true },
+      ],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.views[0]?.filter).toBe('_creatorId = u1 ORDER BY created DESC')
+    expect(detail.cards.map(card => card.id)).toEqual(['t1'])
+  })
+
+  it('keeps only the cards of a status view task types', async () => {
+    const service = createService(createFakeClient({
+      projectTasks: async () => [
+        { id: 't1', projectId: 'p1', title: 'Task', scenarioConfigId: 'sc1' },
+        { id: 't2', projectId: 'p1', title: 'Bug', scenarioConfigId: 'sc2' },
+        { id: 't3', projectId: 'p1', title: 'Unclassified' },
+      ],
+      projectViews: async () => [{ id: 'v-status', name: 'Status board', vertical: 'status', scenarioConfigIds: ['sc1'], isDefault: true }],
+    }))
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    const detail = await service.projectDetail({ projectId: 'p1' })
+    expect(detail.cards.map(card => card.id)).toEqual(['t1'])
+  })
 })
 
 describe('writes', () => {
@@ -279,6 +442,13 @@ describe('writes', () => {
     await service.updateConfig({ cookie: 'SESS=secret' })
     await service.createTask({ projectId: 'p1', title: 'New card', tasklistId: 'tl2' })
     expect(calls.createTask).toEqual([{ projectId: 'p1', title: 'New card', tasklistId: 'tl2' }])
+  })
+
+  it('forwards the task type when creating a card into a workflow status', async () => {
+    const service = createService(createFakeClient())
+    await service.updateConfig({ cookie: 'SESS=secret' })
+    await service.createTask({ projectId: 'p1', title: 'New card', statusId: 'st1', scenarioConfigId: 'sc1' })
+    expect(calls.createTask).toEqual([{ projectId: 'p1', title: 'New card', statusId: 'st1', scenarioConfigId: 'sc1' }])
   })
 
   it('forwards status and stage moves', async () => {

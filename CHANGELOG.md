@@ -4,6 +4,34 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-21
+
+### Added
+
+- Saved views: the board renders the project views the Teambition web board
+  lists (for example "All tasks", a status board, "My tasks", "Created by me")
+  in a rail on the left, and remembers the chosen view per project.
+- Workflow-status boards: a view saved with a workflow vertical renders one
+  column per workflow status instead of one column per kanban stage, which is
+  how the tasks module looks in Teambition. Stage views keep rendering stages.
+- Column quick-add: every column header has a "+" button that opens the create
+  form with that column preselected, workflow statuses included.
+- Card moves understand the column kind: status columns are updated through the
+  workflow status API, stage columns through the stage API.
+- Task-type chip in the task drawer, and the task type needed to create a card
+  into a workflow status is inferred from the target status when unambiguous.
+- Saved view filters: executing and creating user filters are applied to the
+  cards, and status views narrow the cards to their task types.
+- Tests: host view parsing (workflows, task types, views, columns, filters,
+  status creation) and the client view rail / status board (146 total).
+
+### Changed
+
+- Board columns now come from the selected view; projects whose views cannot be
+  read keep rendering their stages.
+- Creating a card into a status column of a project with several task types no
+  longer fails when the target status belongs to exactly one type.
+
 ## [0.3.0] - 2026-10-21
 
 ### Added

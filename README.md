@@ -42,9 +42,13 @@ default, then the panel-wide default workspace.
   created, due or priority. Clicking a row slides a detail drawer in from the
   right (number, priority, assignee, due, stage, task list, created / updated,
   note body) which can also run the card, rebind its workspace and move its stage.
-- **Board**: one column group per stage, cards carrying a status badge, their
-  workspace marker, and the actions Run, Open in Teambition, Bind workspace,
-  Move to stage.
+- **Board**: the project views of the Teambition web board (for example "All
+  tasks", a workflow-status view, "My tasks", "Created by me") in a rail on the
+  left. A view saved with a workflow vertical renders one column per workflow
+  status; stage views render one column group per stage. Every column header has
+  a "+" that opens the create form with that column preselected, and cards carry
+  their workspace marker plus the actions Run, Open in Teambition, Bind
+  workspace and Move to column.
 - **New card form** at the bottom of the panel: title, optional note, target
   stage.
 - **Settings view**: cookie (write / clear), diagnose probes, operator id,
@@ -60,6 +64,11 @@ default, then the panel-wide default workspace.
   table to one of them; switching project clears it back to every list.
 - Default view: the settings view picks task list or board, and the panel plus
   every project switch open on it.
+- Saved views and workflow boards: the board rail lists the project views saved
+  in Teambition and remembers the selection per project. Workflow views render
+  one column per workflow status (the tasks module look), stage views keep the
+  stage columns; "executed by me" / "created by me" views filter their cards,
+  and every column can quick-add a card.
 - Two-level switching (project, then task list). Projects with many task lists
   are grouped by list instead of flattened into dozens of same-named columns; the
   selection is remembered in `localStorage` and restored on the next visit.

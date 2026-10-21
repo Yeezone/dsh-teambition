@@ -54,9 +54,9 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
       'action=status reports the browser-safe settings (cookie configured or not, never the cookie itself), the default workspace and the workspace bindings.',
       'action=diagnose probes the cookie-authenticated Teambition endpoints and returns HTTP status plus a redacted preview per probe; run it first with a new cookie.',
       'action=projects lists the projects the user has joined.',
-      'action=project lists one project with its task lists, stages, workflow statuses and cards; each card carries the workspace resolution the panel would use.',
+      'action=project lists one project with its task lists, stages, saved views, workflows, task types, resolved board columns and cards; each card carries the workspace resolution the panel would use. Pass a saved view id to render its columns: a status view renders the workflow-status columns of its task types.',
       'Kanban columns belong to task lists (a project has several lists, each with its own columns): pass an optional tasklistId to action=project to narrow the detail to one list, and to action=create-task to place the card in that list.',
-      'action=create-task creates a card (projectId and title required; note, tasklistId, stageId, statusId and executorId optional) and is an explicit user write.',
+      'action=create-task creates a card (projectId and title required; note, tasklistId, stageId, statusId, scenarioConfigId and executorId optional) and is an explicit user write. Workflow projects require the task type (scenarioConfigId) when the card is created into a workflow status.',
       'action=set-status moves a card to a workflow status (taskId and statusId required).',
       'action=set-stage moves a card to a kanban stage (taskId and stageId required).',
       'action=bind-workspace binds a project (projectId+workspaceId), a card (taskId+workspaceId) or the default workspace (workspaceId alone); with no ids it clears the default workspace.',
@@ -75,8 +75,10 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
       title: { type: 'string', description: 'create-task: card title.' },
       note: { type: 'string', description: 'create-task: optional card note.' },
       tasklistId: { type: 'string', description: 'project and create-task: optional Teambition task list id; columns belong to a task list, and create-task places the card in it.' },
+      viewId: { type: 'string', description: 'project: optional saved view (smartgroup) id; absent means the project default view. A status view renders workflow-status columns.' },
       statusId: { type: 'string', description: 'create-task and set-status: workflow status id.' },
       stageId: { type: 'string', description: 'create-task and set-stage: kanban stage id.' },
+      scenarioConfigId: { type: 'string', description: 'create-task: optional task type (scenariofieldconfig) id; required when creating into a workflow status of a workflow project.' },
       workspaceId: { type: 'string', description: 'bind-workspace: DSH workspace id to bind.' },
       cookie: { type: 'string', description: 'Optional: full Cookie request header copied from a logged-in teambition.com tab. Stored host-side and never returned.' },
       operatorId: { type: 'string', description: 'Optional: Teambition user id sent as x-operator-id on remote writes.' },
@@ -102,6 +104,7 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
             return view(await service.projectDetail({
               projectId: args.projectId,
               ...(args.tasklistId === undefined ? {} : { tasklistId: args.tasklistId }),
+              ...(args.viewId === undefined ? {} : { viewId: args.viewId }),
             }))
           }
           case 'create-task': {
@@ -114,6 +117,7 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
               ...(args.tasklistId === undefined ? {} : { tasklistId: args.tasklistId }),
               ...(args.stageId === undefined ? {} : { stageId: args.stageId }),
               ...(args.statusId === undefined ? {} : { statusId: args.statusId }),
+              ...(args.scenarioConfigId === undefined ? {} : { scenarioConfigId: args.scenarioConfigId }),
             })
             return view(result)
           }

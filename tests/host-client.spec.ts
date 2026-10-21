@@ -49,6 +49,10 @@ function fakeTransport(routes: readonly Route[]): FakeTransport {
 
 const TASKLIST_URL = 'https://www.teambition.com/api/projects/p1/tasklists'
 const STAGES_URL = /^https:\/\/www\.teambition\.com\/api\/projects\/p1\/stages/
+const TASKFLOW_URL = 'https://www.teambition.com/api/projects/p1/taskflows?withTaskflowstatus=true&type=task'
+const SCENARIO_CONFIG_URL = 'https://www.teambition.com/api/v2/projects/p1/scenariofieldconfigs?objectType=task&withTaskflowstatus=true&withCustomfields=true'
+const VIEW_DEFAULT_URL = 'https://www.teambition.com/api/projects/p1/smartgroups/default?type=tasks'
+const VIEW_LIST_URL = 'https://www.teambition.com/api/v2/projects/p1/smartgroups?pageSize=200&type=custom&labels=common&withGlobal=true'
 const LEGACY_CREATE_URL = 'https://www.teambition.com/api/tasks'
 const V3_CREATE_URL = 'https://api.teambition.com/v3/task/create'
 
@@ -102,6 +106,102 @@ describe('projectStages', () => {
   })
 })
 
+describe('projectWorkflows', () => {
+  it('parses workflows with their ordered statuses', async () => {
+    const fake = fakeTransport([{
+      url: TASKFLOW_URL,
+      body: [{
+        _id: 'wf1',
+        name: 'Default workflow',
+        statuses: [
+          { _id: 'st1', name: 'Doing', kind: 'start', pos: 0 },
+          { _id: 'st2', name: 'Done', kind: 'end', pos: 1 },
+        ],
+      }],
+    }])
+    await expect(webClient(fake.transport).projectWorkflows('p1')).resolves.toEqual([
+      {
+        id: 'wf1',
+        name: 'Default workflow',
+        statuses: [
+          { id: 'st1', name: 'Doing', kind: 'start', pos: 0 },
+          { id: 'st2', name: 'Done', kind: 'end', pos: 1 },
+        ],
+      },
+    ])
+  })
+
+  it('returns no workflows when the project route does not answer', async () => {
+    const fake = fakeTransport([{ url: TASKFLOW_URL, status: 404, body: { code: 'NotFound', message: 'nope' } }])
+    await expect(webClient(fake.transport).projectWorkflows('p1')).resolves.toEqual([])
+  })
+})
+
+describe('projectScenarioConfigs', () => {
+  it('parses task types with their workflow and status ids', async () => {
+    const fake = fakeTransport([{
+      url: SCENARIO_CONFIG_URL,
+      body: [{ _id: 'sc1', name: 'Task', _taskflowId: 'wf1', _statusIds: ['st1', 'st2'] }],
+    }])
+    await expect(webClient(fake.transport).projectScenarioConfigs('p1')).resolves.toEqual([
+      { id: 'sc1', name: 'Task', taskflowId: 'wf1', statusIds: ['st1', 'st2'] },
+    ])
+  })
+
+  it('reads the statuses of the bound workflow instead of the raw id list', async () => {
+    const fake = fakeTransport([{
+      url: SCENARIO_CONFIG_URL,
+      body: [{ _id: 'sc1', name: 'Task', _taskflowId: 'wf1', statuses: [{ _id: 'st3', name: 'Review', kind: 'start', pos: 0 }] }],
+    }])
+    await expect(webClient(fake.transport).projectScenarioConfigs('p1')).resolves.toEqual([
+      { id: 'sc1', name: 'Task', taskflowId: 'wf1', statusIds: ['st3'] },
+    ])
+  })
+})
+
+describe('projectViews', () => {
+  it('reads the default view and the saved view list, default first', async () => {
+    const fake = fakeTransport([
+      { url: VIEW_DEFAULT_URL, body: { projectDefaultSmartgroup: { _id: 'v-default', name: 'My tasks' } } },
+      {
+        url: VIEW_LIST_URL,
+        body: {
+          result: [
+            { _id: 'v-stage', name: 'Stage board', view: { type: 'kanban', vertical: 'stage', _verticalIds: [] } },
+            {
+              _id: 'v-status',
+              name: 'Status board',
+              view: { type: 'kanban', vertical: 'scenarioConfigStatus', _verticalIds: ['sc1'] },
+              filter: '_executorId = u1 ORDER BY created DESC',
+              orderBy: 'created',
+            },
+          ],
+        },
+      },
+    ])
+    await expect(webClient(fake.transport).projectViews('p1')).resolves.toEqual([
+      { id: 'v-default', name: 'My tasks', vertical: 'unknown', scenarioConfigIds: [], isDefault: true },
+      { id: 'v-stage', name: 'Stage board', vertical: 'stage', scenarioConfigIds: [] },
+      {
+        id: 'v-status',
+        name: 'Status board',
+        vertical: 'status',
+        scenarioConfigIds: ['sc1'],
+        filter: '_executorId = u1 ORDER BY created DESC',
+        orderBy: 'created',
+      },
+    ])
+  })
+
+  it('returns no views when the project has none', async () => {
+    const fake = fakeTransport([
+      { url: VIEW_DEFAULT_URL, body: { code: 'NotFound', message: 'nope' } },
+      { url: VIEW_LIST_URL, status: 404, body: { code: 'NotFound', message: 'nope' } },
+    ])
+    await expect(webClient(fake.transport).projectViews('p1')).resolves.toEqual([])
+  })
+})
+
 describe('createTask', () => {
   it('sends the selected task list on the legacy route without a lookup', async () => {
     const fake = fakeTransport([{ method: 'POST', url: LEGACY_CREATE_URL, body: { _id: 't-new' } }])
@@ -121,6 +221,25 @@ describe('createTask', () => {
     })
   })
 
+  it('carries the workflow status and task type on the legacy route', async () => {
+    const fake = fakeTransport([{ method: 'POST', url: LEGACY_CREATE_URL, body: { _id: 't-new' } }])
+    const result = await webClient(fake.transport).createTask({
+      projectId: 'p1',
+      title: 'New card',
+      tasklistId: 'tl2',
+      statusId: 'st1',
+      scenarioConfigId: 'sc1',
+    })
+    expect(result.taskId).toBe('t-new')
+    expect(bodyOf(fake.requests[0])).toEqual({
+      _projectId: 'p1',
+      _tasklistId: 'tl2',
+      content: 'New card',
+      _taskflowstatusId: 'st1',
+      _scenariofieldconfigId: 'sc1',
+    })
+  })
+
   it('falls back to the first task list of the project on the legacy route', async () => {
     const fake = fakeTransport([
       { method: 'GET', url: TASKLIST_URL, body: [{ _id: 'tl1', title: 'List One' }] },
@@ -135,5 +254,84 @@ describe('createTask', () => {
     const client = new TeambitionClient({ cookie: 'SESS=secret', apiBase: 'api', transport: fake.transport })
     await client.createTask({ projectId: 'p1', title: 'New card', tasklistId: 'tl2' })
     expect(bodyOf(fake.requests[0])).toEqual({ content: 'New card', projectId: 'p1', tasklistId: 'tl2' })
+  })
+
+  it('carries the workflow status and task type on the v3 route', async () => {
+    const fake = fakeTransport([{ method: 'POST', url: V3_CREATE_URL, body: { id: 't-new' } }])
+    const client = new TeambitionClient({ cookie: 'SESS=secret', apiBase: 'api', transport: fake.transport })
+    await client.createTask({ projectId: 'p1', title: 'New card', statusId: 'st1', scenarioConfigId: 'sc1' })
+    expect(bodyOf(fake.requests[0])).toEqual({
+      content: 'New card',
+      projectId: 'p1',
+      taskflowstatusId: 'st1',
+      scenarioConfigId: 'sc1',
+    })
+  })
+
+  it('infers the single task type of the project when creating into a workflow status', async () => {
+    const fake = fakeTransport([
+      { method: 'GET', url: SCENARIO_CONFIG_URL, body: [{ _id: 'sc1', name: 'Task', _taskflowId: 'wf1' }] },
+      { method: 'POST', url: V3_CREATE_URL, body: { id: 't-new' } },
+    ])
+    const client = new TeambitionClient({ cookie: 'SESS=secret', apiBase: 'api', transport: fake.transport })
+    await client.createTask({ projectId: 'p1', title: 'New card', statusId: 'st1' })
+    expect(bodyOf(fake.requests.at(-1))).toEqual({
+      content: 'New card',
+      projectId: 'p1',
+      taskflowstatusId: 'st1',
+      scenarioConfigId: 'sc1',
+    })
+  })
+
+  it('refuses to guess the task type when the status names none of them', async () => {
+    const fake = fakeTransport([
+      {
+        method: 'GET',
+        url: SCENARIO_CONFIG_URL,
+        body: [
+          { _id: 'sc1', name: 'Task', _taskflowId: 'wf1' },
+          { _id: 'sc2', name: 'Bug', _taskflowId: 'wf1' },
+        ],
+      },
+      {
+        method: 'GET',
+        url: TASKFLOW_URL,
+        body: {
+          result: [
+            { _id: 'wf1', name: 'Default workflow', taskflowstatuses: [{ _id: 'st1', name: 'Todo' }] },
+          ],
+        },
+      },
+    ])
+    const client = new TeambitionClient({ cookie: 'SESS=secret', apiBase: 'api', transport: fake.transport })
+    await expect(client.createTask({ projectId: 'p1', title: 'New card', statusId: 'st-unknown' }))
+      .rejects.toMatchObject({ failure: 'api', message: expect.stringMatching(/2 task types/) })
+  })
+
+  it('infers the task type whose workflow owns the target status', async () => {
+    const fake = fakeTransport([
+      {
+        method: 'GET',
+        url: SCENARIO_CONFIG_URL,
+        body: [
+          { _id: 'sc1', name: 'Task', _taskflowId: 'wf1' },
+          { _id: 'sc2', name: 'Bug', _taskflowId: 'wf2' },
+        ],
+      },
+      {
+        method: 'GET',
+        url: TASKFLOW_URL,
+        body: {
+          result: [
+            { _id: 'wf1', name: 'Request workflow', taskflowstatuses: [{ _id: 'st1', name: 'Designing' }] },
+            { _id: 'wf2', name: 'Bug workflow', taskflowstatuses: [{ _id: 'st2', name: 'Fixing' }] },
+          ],
+        },
+      },
+      { method: 'POST', url: V3_CREATE_URL, body: { id: 't-new' } },
+    ])
+    const client = new TeambitionClient({ cookie: 'SESS=secret', apiBase: 'api', transport: fake.transport })
+    await client.createTask({ projectId: 'p1', title: 'New bug', statusId: 'st2' })
+    expect(bodyOf(fake.requests.at(-1))).toMatchObject({ taskflowstatusId: 'st2', scenarioConfigId: 'sc2' })
   })
 })

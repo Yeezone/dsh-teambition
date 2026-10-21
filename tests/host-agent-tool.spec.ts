@@ -38,9 +38,9 @@ function harness(overrides: Partial<Record<string, unknown>> = {}): Harness {
     updateConfig: async (request: unknown) => { calls.push('updateConfig'); updates.push(request); return VIEW },
     diagnose: async () => { calls.push('diagnose'); return { diagnostics: { probedAt: 1, cookieConfigured: false, conclusion: 'no-cookie', message: 'none', results: [] } } },
     listProjects: async () => { calls.push('listProjects'); return { projects: [] } },
-    projectDetail: async (request: { projectId: string; tasklistId?: string }) => {
-      calls.push(`projectDetail:${request.projectId}:${request.tasklistId ?? '-'}`)
-      return { project: { id: request.projectId, name: request.projectId }, tasklists: [], stages: [], statuses: [], cards: [] }
+    projectDetail: async (request: { projectId: string; tasklistId?: string; viewId?: string }) => {
+      calls.push(`projectDetail:${request.projectId}:${request.tasklistId ?? '-'}:${request.viewId ?? '-'}`)
+      return { project: { id: request.projectId, name: request.projectId }, tasklists: [], stages: [], statuses: [], columns: [], cards: [], views: [], workflows: [], scenarioConfigs: [] }
     },
     createTask: async (request: unknown) => { calls.push('createTask'); writes.push(request); return { taskId: 't-new' } },
     setStatus: async (request: { taskId: string; statusId: string }) => { calls.push(`setStatus:${request.taskId}:${request.statusId}`); return {} },
@@ -65,6 +65,8 @@ describe('teambition tool definition', () => {
       expect(schema).toContain(action)
     }
     expect(schema).toContain('tasklistId')
+    expect(schema).toContain('viewId')
+    expect(schema).toContain('scenarioConfigId')
     expect(test.tool.description).toMatch(/columns belong to task lists/)
   })
 })
@@ -90,7 +92,19 @@ describe('teambition tool dispatch', () => {
   it('forwards the selected task list to the project detail', async () => {
     const test = harness()
     await call(test.tool, { action: 'project', projectId: 'p1', tasklistId: 'tl2' })
-    expect(test.calls).toEqual(['projectDetail:p1:tl2'])
+    expect(test.calls).toEqual(['projectDetail:p1:tl2:-'])
+  })
+
+  it('forwards the selected view to the project detail', async () => {
+    const test = harness()
+    await call(test.tool, { action: 'project', projectId: 'p1', viewId: 'v-status' })
+    expect(test.calls).toEqual(['projectDetail:p1:-:v-status'])
+  })
+
+  it('forwards the task type to create-task', async () => {
+    const test = harness()
+    await call(test.tool, { action: 'create-task', projectId: 'p1', title: 'New', statusId: 'st1', scenarioConfigId: 'sc1' })
+    expect(test.writes).toEqual([{ projectId: 'p1', title: 'New', statusId: 'st1', scenarioConfigId: 'sc1' }])
   })
 
   it('forwards the selected task list to create-task', async () => {
