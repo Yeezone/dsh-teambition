@@ -90,6 +90,22 @@ describe('projectTasklists', () => {
   })
 })
 
+describe('projectTasks', () => {
+  it('unions the project collection with the task-list collections', async () => {
+    const fake = fakeTransport([
+      { url: 'https://www.teambition.com/api/projects/p1/tasks?pageSize=200', body: [] },
+      { url: TASKLIST_URL, body: [{ _id: 'tl1', title: '任务' }] },
+      {
+        url: /^https:\/\/www\.teambition\.com\/api\/tasks\?_projectId=p1&_tasklistId=tl1&pageSize=200&page=1$/,
+        body: [{ _id: 't1', content: 'Alpha' }, { _id: 't2', content: 'Beta' }],
+      },
+    ])
+    const tasks = await webClient(fake.transport).projectTasks('p1')
+    expect(tasks.map(task => task.id)).toEqual(['t1', 't2'])
+    expect(tasks.map(task => task.title)).toEqual(['Alpha', 'Beta'])
+  })
+})
+
 describe('projectStages', () => {
   it('attributes every column to its task list', async () => {
     const fake = fakeTransport([{

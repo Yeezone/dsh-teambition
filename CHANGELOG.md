@@ -4,6 +4,22 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-10-21
+
+### Fixed
+
+- Projects whose cards live in a task list no longer render an empty board. The
+  project-level task collection answers `[]` for workflow projects such as the
+  ones created from the Teambition workflow template, so the client now also
+  reads every task list with `GET /api/tasks?_tasklistId=...&_projectId=...`
+  (300 rows per page, walked by `page`) and unions both sources by task id.
+  Cards in the closed and deferred workflow statuses appear again.
+
+### Tests
+
+- One case proving the task-list collection is unioned in when the project
+  collection comes back empty (150 tests in total).
+
 ## [0.5.0] - 2026-10-21
 
 ### Added
