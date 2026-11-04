@@ -4,6 +4,13 @@ All notable changes to this plugin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-04
+
+### Fixed
+
+- The host half no longer imports `@deepseek-ai/dsh-tools` at runtime: DSH 0.2.1-rc.5 stopped resolving runtime SDK packages for installed plugin bundles, so the bundle failed with `ERR_MODULE_NOT_FOUND` and the whole plugin (sidebar entry and `/teambition` routes) disappeared. `defineTool` now lives in `src/host/tool-spec.ts` and compiles the same parameter spec to a plain JSON schema; the SDK is imported for types only.
+- Client test fixtures use a relative due date so the "upcoming, not overdue" case cannot drift into the past as the clock advances.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added
