@@ -88,7 +88,8 @@ const DETAIL: TeambitionProjectDetail = {
     uniqueId: 79,
     executorId: 'u1',
     executorName: '安阳',
-    dueAt: Date.parse('2026-10-24T00:00:00Z'),
+    // Relative so the "upcoming, not overdue" fixture never drifts into the past.
+    dueAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
     createdAt: Date.parse('2026-10-01T02:00:00Z'),
     subtaskCount: 2,
     commentsCount: 3,

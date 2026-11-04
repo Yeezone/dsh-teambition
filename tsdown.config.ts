@@ -27,7 +27,6 @@ export default clientBundle('@yeezone/dsh-client-ui-teambition', ['src/index.ts'
     '@deepseek-ai/dsh-llm',
     '@deepseek-ai/dsh-settings',
     '@deepseek-ai/dsh-system-prompt',
-    '@deepseek-ai/dsh-tools',
     '@deepseek-ai/dsh-workspace',
   ],
 })

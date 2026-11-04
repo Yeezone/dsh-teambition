@@ -11,7 +11,8 @@
  * @module dsh-teambition/host/agent-tool
  */
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { defineTool } from './tool-spec.ts'
 import type { TeambitionCardBinding, TeambitionProjectBinding } from '../core/protocol.ts'
 import { TeambitionHostError, type TeambitionService } from './service.ts'
 
@@ -45,6 +46,32 @@ function messageOf(error: unknown): string {
 
 /** Name of the one tool this provider registers. */
 export const TEAMBITION_TOOL_NAME = 'teambition'
+
+/** Validated arguments of the `teambition` tool. */
+interface TeambitionToolArgs {
+  readonly action:
+    | 'status'
+    | 'diagnose'
+    | 'projects'
+    | 'project'
+    | 'task-detail'
+    | 'create-task'
+    | 'set-status'
+    | 'set-stage'
+    | 'bind-workspace'
+  readonly projectId?: string
+  readonly taskId?: string
+  readonly title?: string
+  readonly note?: string
+  readonly tasklistId?: string
+  readonly viewId?: string
+  readonly statusId?: string
+  readonly stageId?: string
+  readonly scenarioConfigId?: string
+  readonly workspaceId?: string
+  readonly cookie?: string
+  readonly operatorId?: string
+}
 
 /** Build the tool bound to one service. */
 export function buildTeambitionTool(service: TeambitionService): ToolDefinition {
@@ -86,7 +113,8 @@ export function buildTeambitionTool(service: TeambitionService): ToolDefinition 
       operatorId: { type: 'string', description: 'Optional: Teambition user id sent as x-operator-id on remote writes.' },
     },
     output: { schema: { type: 'json' }, render: renderJson },
-    async execute(args) {
+    async execute(rawArgs) {
+      const args = rawArgs as unknown as TeambitionToolArgs
       try {
         if (args.cookie !== undefined || args.operatorId !== undefined) {
           await service.updateConfig({
